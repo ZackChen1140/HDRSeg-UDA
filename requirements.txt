@@ -1,0 +1,8 @@
+transformers==4.44.2
+tensorboard==2.12.1
+evaluate==0.4.3
+opencv-python==4.10.0.84
+matplotlib==3.7.2
+pillow==10.4.0
+simple-parsing==0.1.6
+ray==2.10.0
