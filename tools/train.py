@@ -48,8 +48,8 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         transform.Normalize(),
     ]
 
-    train_dataset = CityscapesHDR_NLCS2(img_dir=cfg.train_images_root, ann_dir=cfg.train_labels_root, rcm=rcm, transforms=train_transforms, power=cfg.img_proc_params)
-    val_dataset = CityscapesHDR_NLCS2(img_dir=cfg.val_images_root, ann_dir=cfg.val_labels_root, rcm=None, transforms=val_transforms, power=cfg.img_proc_params)
+    train_dataset = CityscapesHDR_NLCS2(img_dir=cfg.train_images_root, ann_dir=cfg.train_labels_root, rcm=rcm, transforms=train_transforms, parameters=cfg.img_proc_params)
+    val_dataset = CityscapesHDR_NLCS2(img_dir=cfg.val_images_root, ann_dir=cfg.val_labels_root, rcm=None, transforms=val_transforms, parameters=cfg.img_proc_params)
 
     train_dataloader = InfiniteDataloader(
         dataset=train_dataset,
