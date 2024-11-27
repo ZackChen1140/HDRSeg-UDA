@@ -13,8 +13,8 @@ def non_linear_contrast_stretching_asymmetric(image, power, pivot):
     return y
 
 def non_linear_contrast_stretching_log(image, alpha):
-    y = np.log1p(image)
-    y = y / np.max(alpha * y)
+    y = np.log1p(alpha * image)
+    y = y / np.max(y)
     return y
 
 def non_linear_contrast_stretching_exp(image, power):
