@@ -15,7 +15,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import functional as F
 from engine.transform import Composition, Transform
 from engine.category import Category
-from engine.processor import non_linear_contrast_stretching_asymmetric
+from engine.processor import non_linear_contrast_stretching_asymmetric, non_linear_contrast_stretching_exp, non_linear_contrast_stretching_log
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -175,9 +175,11 @@ class CityscapesHDR_NLCS2(Dataset):
         self.ann_dir = ann_dir
         self.rcm = rcm
         self.transforms = Composition(transforms)
-        self.power = parameters[0]
-        self.pivot0 = parameters[1]
-        self.pivot1 = parameters[2]
+        self.alpha = parameters[0]
+        self.power = parameters[1]
+        # self.power = parameters[0]
+        # self.pivot0 = parameters[1]
+        # self.pivot1 = parameters[2]
 
     def __len__(self):
         if self.rcm == None:
@@ -203,8 +205,10 @@ class CityscapesHDR_NLCS2(Dataset):
         image = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         image = image.astype(np.float32) / 65535
         image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        v0 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot0)
-        v1 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot1)
+        # v0 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot0)
+        # v1 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot1)
+        v0 = non_linear_contrast_stretching_log(image[:, :, 2], self.alpha)
+        v1 = non_linear_contrast_stretching_exp(image[:, :, 2], self.power)
         image0, image1 = image.copy(), image.copy()
         image0[:, :, 2] = v0
         image1[:, :, 2] = v1
