@@ -43,7 +43,11 @@ class MultiPathSegformer(nn.Module):
                 loss_fct = nn.BCEWithLogitsLoss(reduction="none")
                 loss = loss_fct(upsampled_logits.squeeze(1), labels.float())
                 loss = (loss * valid_mask).mean()
-        predicted = upsampled_logits.argmax(dim=1)
+        else:
+            logits = nn.functional.interpolate(
+                logits, size=inputs[0].shape[-2:], mode="bilinear", align_corners=False
+            )
+        predicted = upsampled_logits.argmax(dim=1) if labels is not None else logits.argmax(dim=1)
         
         return predicted, loss
 
@@ -152,7 +156,11 @@ class DualPathSegformer(nn.Module):
                 loss_fct = nn.BCEWithLogitsLoss(reduction="none")
                 loss = loss_fct(upsampled_logits.squeeze(1), labels.float())
                 loss = (loss * valid_mask).mean()
-        predicted = upsampled_logits.argmax(dim=1)
+        else:
+            logits = nn.functional.interpolate(
+                logits, size=inputs[0].shape[-2:], mode="bilinear", align_corners=False
+            )
+        predicted = upsampled_logits.argmax(dim=1) if labels is not None else logits.argmax(dim=1)
         
         return predicted, loss
 
