@@ -66,50 +66,55 @@ class RareCategoryManager:
         return self.consumable_stems[i]
 
 class RLMD(Dataset):
-    def __init__(self, img_dir, ann_dir, image_transform=None):
+    def __init__(self, img_dir: str, ann_dir: str, rcm: Optional[RareCategoryManager], transforms: List[Transform]):
         self.img_paths = list()
         self.ann_paths = list()
-        for file in os.listdir(img_dir):
-            if os.path.exists(f'{img_dir}/{file}') == True and os.path.exists(f'{ann_dir}/{file[:-4]}.png') == True:
-                self.img_paths.append(f'{img_dir}/{file}')
-                self.ann_paths.append(f'{ann_dir}/{file[:-4]}.png')
-        self.img_t = image_transform
+        if rcm == None:
+            for file in os.listdir(img_dir):
+                if os.path.exists(f'{img_dir}/{file}') == True and os.path.exists(f'{ann_dir}/{file[:-4]}.png') == True:
+                    self.img_paths.append(f'{img_dir}/{file}')
+                    self.ann_paths.append(f'{ann_dir}/{file[:-4]}.png')
+        self.img_dir = img_dir
+        self.ann_dir = ann_dir
+        self.rcm = rcm
+        self.transforms = Composition(transforms)
 
     def __len__(self):
-        return len(self.img_paths)
+        if self.rcm == None:
+            return len(self.img_paths)
+        else:
+            return self.rcm.length
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        image = cv2.imread(self.img_paths[idx], cv2.IMREAD_UNCHANGED)
-        image0 = (image / 65535.0) * 255.0
-        image1 = np.power(image / 65535.0, 0.65) * 255.0
-        image2 = np.power(image / 65535.0, 0.35) * 255.0
-        image0 = cv2.cvtColor(image0.astype(np.uint8), cv2.COLOR_BGR2RGB)
-        image1 = cv2.cvtColor(image1.astype(np.uint8), cv2.COLOR_BGR2RGB)
-        image2 = cv2.cvtColor(image2.astype(np.uint8), cv2.COLOR_BGR2RGB)
-        image0 = Image.fromarray(image0)
-        image1 = Image.fromarray(image1)
-        image2 = Image.fromarray(image2)
+        if self.rcm == None:
+            img_path = self.img_paths[idx]
+            ann_path = self.ann_paths[idx]
+        else:
+            random_cat_id = self.rcm.get_rare_cat_id()
+            stems = self.rcm.get_stems(random_cat_id)
+            stem = random.choice(stems)
+            stems.remove(stem)
+            img_path = f'{self.img_dir}/{stem.split("/")[-1][:-4]}.jpg'
+            ann_path = stem
 
-        #image = Image.open(self.img_paths[idx]).convert('RGB')
-        mask = Image.open(self.ann_paths[idx])
+        image = Image.open(img_path)
+        ann = Image.open(ann_path)
+        assert image.mode=='RGB' and ann.mode=='P'
 
-        if self.img_t:
-            image0 = self.img_t(image0)
-            image1 = self.img_t(image1)
-            image2 = self.img_t(image2)
+        transform_dict = self.transforms.transform(
+            {
+                "img": F.to_tensor(image),
+                "ann": torch.from_numpy(np.asarray(ann).copy())[None, :].long()
+            }
+        )
+        
+        image = transform_dict["img"]
+        ann = transform_dict["ann"]
 
-        mask = torch.from_numpy(np.asarray(mask).copy())[None, :].long()
-
-        mask = F.resize(
-            mask[:, None, :],
-            ([512, 512]),
-            interpolation=F.InterpolationMode.NEAREST,
-        ).squeeze()
-
-        return image0, image1, image2, mask
+        return image, ann
     
 class CityscapesHDR_GC3(Dataset):
     def __init__(self, img_dir, ann_dir, transforms: List[Transform], gamma: List[float]):

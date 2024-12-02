@@ -12,6 +12,33 @@ from torch.utils.data import Dataset
 from torchvision.transforms import functional as F
 from engine.transform import Composition, Transform
 
+class RLMDImgAnnDataset(Dataset):
+    def __init__(
+        self,
+        img_dir: str,
+        ann_dir: str,
+        transforms: List[Transform],
+    ) -> None:
+        super().__init__()
+        self.img_paths = list()
+        self.ann_paths = list()
+        for file in os.listdir(img_dir):
+            if os.path.exists(f'{img_dir}/{file}') == True and os.path.exists(f'{ann_dir}/{file[:-4]}.png') == True:
+                self.img_paths.append(f'{img_dir}/{file}')
+                self.ann_paths.append(f'{ann_dir}/{file[:-4]}.png')
+        self.transforms = Composition(transforms)
+
+    def __len__(self) -> int:
+        return len(self.img_paths)
+
+    def __getitem__(self, idx: int) -> List[Tuple[str, Any]]:
+        return self.transforms.transform(
+            {
+                "img_path": str(self.img_paths[idx]),
+                "ann_path": str(self.ann_paths[idx]),
+            }
+        )
+
 class CityscapesImgAnnDataset(Dataset):
     def __init__(
         self,

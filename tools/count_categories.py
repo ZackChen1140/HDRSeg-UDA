@@ -4,7 +4,7 @@ import json
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from engine.count_dataloader import CityscapesImgAnnDataset
+from engine.count_dataloader import RLMDImgAnnDataset
 from engine.category import Category, count_categories
 from engine.transform import LoadAnn, Resize, LoadAnn
 
@@ -38,7 +38,7 @@ def count_dataset_categories(dataloader, categories, rcs):
 def main(cate_filepath, img_dirpath, ann_dirpath, rcs_savepath):
     categories = Category.load(cate_filepath, False)
 
-    ann_dataset = CityscapesImgAnnDataset(
+    ann_dataset = RLMDImgAnnDataset(
         img_dir=img_dirpath,
         ann_dir=ann_dirpath,
         transforms=[
