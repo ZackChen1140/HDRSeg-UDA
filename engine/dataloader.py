@@ -116,6 +116,74 @@ class RLMD(Dataset):
 
         return image, ann
     
+class RLMD_NLCS2(Dataset):
+    def __init__(self, img_dir: str, ann_dir: str, rcm: Optional[RareCategoryManager], transforms: List[Transform], parameters: List[float]):
+        self.img_paths = list()
+        self.ann_paths = list()
+        if rcm == None:
+            for file in os.listdir(img_dir):
+                if os.path.exists(f'{img_dir}/{file}') == True and os.path.exists(f'{ann_dir}/{file[:-4]}.png') == True:
+                    self.img_paths.append(f'{img_dir}/{file}')
+                    self.ann_paths.append(f'{ann_dir}/{file[:-4]}.png')
+        self.img_dir = img_dir
+        self.ann_dir = ann_dir
+        self.rcm = rcm
+        self.transforms = Composition(transforms)
+        self.alpha = parameters[0]
+        self.power = parameters[1]
+
+    def __len__(self):
+        if self.rcm == None:
+            return len(self.img_paths)
+        else:
+            return self.rcm.length
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        if self.rcm == None:
+            img_path = self.img_paths[idx]
+            ann_path = self.ann_paths[idx]
+        else:
+            random_cat_id = self.rcm.get_rare_cat_id()
+            stems = self.rcm.get_stems(random_cat_id)
+            stem = random.choice(stems)
+            stems.remove(stem)
+            img_path = f'{self.img_dir}/{stem.split("/")[-1][:-4]}.jpg'
+            ann_path = stem
+
+        # image = Image.open(img_path)
+        image = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+        image = image.astype(np.float32) / 255.0
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        # v0 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot0)
+        # v1 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot1)
+        v0 = non_linear_contrast_stretching_log(image[:, :, 2], self.alpha)
+        v1 = non_linear_contrast_stretching_exp(image[:, :, 2], self.power)
+        image0, image1 = image.copy(), image.copy()
+        image0[:, :, 2] = v0
+        image1[:, :, 2] = v1
+        image0 = (cv2.cvtColor(image0, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8)
+        image1 = (cv2.cvtColor(image1, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8)
+        ann = Image.open(ann_path)
+
+        transform_dict = self.transforms.transform(
+            {
+                "img0": F.to_tensor(image0),
+                "img1": F.to_tensor(image1),
+                "ann": torch.from_numpy(np.asarray(ann).copy())[None, :].long()
+            }
+        )
+        
+        images = [
+            transform_dict["img0"],
+            transform_dict["img1"]
+        ]
+        ann = transform_dict["ann"]
+
+        return images, ann
+    
 class CityscapesHDR_GC3(Dataset):
     def __init__(self, img_dir, ann_dir, transforms: List[Transform], gamma: List[float]):
         super().__init__()
