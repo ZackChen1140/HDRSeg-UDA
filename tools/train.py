@@ -16,7 +16,7 @@ import evaluate
 from transformers import SegformerConfig
 
 from engine.segformer import MultiPathSegformer, DualPathSegformer
-from engine.dataloader import CityscapesHDR_NLCS2, CityscapesHDR_GC3, InfiniteDataloader, RareCategoryManager
+from engine.dataloader import RLMD_NLCS2, CityscapesLDR_NLCS2, CityscapesHDR_NLCS2, CityscapesHDR_GC3, InfiniteDataloader, RareCategoryManager
 from engine.category import Category
 from engine import transform
 from engine.misc import set_seed
@@ -82,6 +82,14 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         ]
     )
 
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, 1e-4, 1, 1500)
+    poly_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, cfg.max_iters - 1500, 1)
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, poly_scheduler],
+        milestones=[1500]
+    )
+
     scalar = torch.GradScaler(device=device)
 
     if checkpoint is not None:
@@ -89,6 +97,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         model.load_state_dict(ckpt['model_state_dict'])
         model.to(device)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        scheduler.load_state_dict(ckpt["scheduler"])
         last_best = ckpt['best_miou']
         last_iteration = ckpt['iteration']
     else:
@@ -112,6 +121,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         scalar.scale(loss).backward()
         scalar.step(optimizer)
         scalar.update()
+        scheduler.step()
 
         with torch.no_grad():
             metrics = metric._compute(
@@ -178,6 +188,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
                 checkpoint = {
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
                     'best_miou': val_miou,
                     'iteration': iter
                 }
