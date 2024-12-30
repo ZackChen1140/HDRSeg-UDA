@@ -20,6 +20,7 @@ from engine.dataloader import RLMD_NLCS2, CityscapesLDR_NLCS2, CityscapesHDR_NLC
 from engine.category import Category
 from engine import transform
 from engine.misc import set_seed
+from engine.validator import Validator
 from configs.config import TrainingConfig
 
 
@@ -82,6 +83,8 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         ]
     )
 
+    validator = Validator(val_dataloader, model, device, metric, cfg.crop_size, cfg.stride, len(categories), mode='slide')
+
     warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, 1e-4, 1, 1500)
     poly_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, cfg.max_iters - 1500, 1)
     scheduler = torch.optim.lr_scheduler.SequentialLR(
@@ -113,10 +116,11 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         inputs, labels = next(train_dataloader)
         inputs, labels = [im.to(device) for im in inputs], labels.to(device)
 
-        predicted, loss = model.forward(
+        upsampled_logits, loss = model.forward(
             inputs=inputs,
             labels=labels
         )
+        predicted = upsampled_logits.argmax(dim=1)
 
         scalar.scale(loss).backward()
         scalar.step(optimizer)
@@ -149,41 +153,43 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         if iter % cfg.val_interval == 0:
             model.eval()
             with torch.no_grad():
-                val_batch = 0.0
-                iou_list = None
-                batch_list = None
-                for inputs, labels in val_dataloader:
-                    inputs, labels = [im.to(device) for im in inputs], labels.to(device)
+                # val_batch = 0.0
+                # iou_list = None
+                # batch_list = None
+                # for inputs, labels in val_dataloader:
+                #     inputs, labels = [im.to(device) for im in inputs], labels.to(device)
 
-                    predicted, loss = model.forward(
-                        inputs=inputs,
-                        labels=labels
-                    )
-                    metrics = metric._compute(
-                        predictions=predicted.cpu(),
-                        references=labels.cpu(),
-                        num_labels=segconfig.num_labels,
-                        ignore_index=255,
-                        reduce_labels=False,
-                    )
-                    val_batch += 1
-                    batch_loss += loss.item()
-                    batch_miou += metrics['mean_iou']
-                    batch_acc += metrics['mean_accuracy']
-                    if iou_list == None:
-                        iou_list = metrics['per_category_iou'].tolist()
-                        batch_list = [0.0 if math.isnan(v) else 1.0 for v in iou_list]
-                    else:
-                        for idx, iou in enumerate(metrics['per_category_iou'].tolist()):
-                            if not math.isnan(iou):
-                                iou_list[idx] = iou if math.isnan(iou_list[idx]) else iou_list[idx] + iou
-                                batch_list[idx] += 1
+                #     upsampled_logits, loss = model.forward(
+                #         inputs=inputs,
+                #         labels=labels
+                #     )
+                #     predicted = upsampled_logits.argmax(dim=1)
+                #     metrics = metric._compute(
+                #         predictions=predicted.cpu(),
+                #         references=labels.cpu(),
+                #         num_labels=segconfig.num_labels,
+                #         ignore_index=255,
+                #         reduce_labels=False,
+                #     )
+                #     val_batch += 1
+                #     batch_loss += loss.item()
+                #     batch_miou += metrics['mean_iou']
+                #     batch_acc += metrics['mean_accuracy']
+                #     if iou_list == None:
+                #         iou_list = metrics['per_category_iou'].tolist()
+                #         batch_list = [0.0 if math.isnan(v) else 1.0 for v in iou_list]
+                #     else:
+                #         for idx, iou in enumerate(metrics['per_category_iou'].tolist()):
+                #             if not math.isnan(iou):
+                #                 iou_list[idx] = iou if math.isnan(iou_list[idx]) else iou_list[idx] + iou
+                #                 batch_list[idx] += 1
 
-                val_loss = batch_loss / val_batch
-                val_miou = batch_miou / val_batch
-                val_acc = batch_acc / val_batch
-                iou_list = [v / b for v, b in zip(iou_list, batch_list)]
-                batch_loss, batch_miou, batch_acc = 0, 0, 0
+                # val_loss = batch_loss / val_batch
+                # val_miou = batch_miou / val_batch
+                # val_acc = batch_acc / val_batch
+                # iou_list = [v / b for v, b in zip(iou_list, batch_list)]
+                # batch_loss, batch_miou, batch_acc = 0, 0, 0
+                val_loss, val_miou, val_acc, iou_list = validator.validate()
 
                 checkpoint = {
                     'model_state_dict': model.state_dict(),

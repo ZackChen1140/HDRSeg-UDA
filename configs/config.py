@@ -1,11 +1,11 @@
-from typing import Tuple
+from typing import Tuple, Optional
 from simple_parsing import Serializable
 from dataclasses import dataclass
 
 @dataclass
 class TrainingConfig(Serializable):
     category_csv: str
-    rcs_path: str
+    rcs_path: Optional[str]
 
     train_images_root: str
     train_labels_root: str
@@ -27,6 +27,7 @@ class TrainingConfig(Serializable):
     rcs_temperature: float
     image_scale: Tuple[int, int]
     crop_size: Tuple[int, int]
+    stride: Optional[Tuple[int, int]]
     random_resize_ratio: Tuple[float, float]
 
     seed: int
