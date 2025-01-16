@@ -1,19 +1,19 @@
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 from simple_parsing import Serializable
 from dataclasses import dataclass
 
 @dataclass
 class TrainingConfig(Serializable):
+    dataset: str
     category_csv: str
-    rcs_path: Optional[str]
 
+    rcs_path: Optional[str]
     train_images_root: str
     train_labels_root: str
     val_images_root: str
     val_labels_root: str
 
-    img_proc_params: list
-
+    model: str
     train_batch_size: int
     val_batch_size: int
     backbone_lr: float
@@ -24,44 +24,13 @@ class TrainingConfig(Serializable):
     train_interval: int
     val_interval: int
 
-    rcs_temperature: float
+    rcs_temperature: Optional[float]
+    max_intensity: Optional[float]
+    contrast_stretch: Optional[List[str]]
+    img_proc_params: Optional[list]
     image_scale: Tuple[int, int]
     crop_size: Tuple[int, int]
     stride: Optional[Tuple[int, int]]
-    random_resize_ratio: Tuple[float, float]
-
-    seed: int
-    num_workers: int
-    pin_memory: bool
-
-@dataclass
-class TuningConfig(Serializable):
-    num_samples: int
-    gpus_per_trial: float
-    grace_period: int
-
-    category_csv: str
-    rcs_path: str
-
-    train_images_root: str
-    train_labels_root: str
-    val_images_root: str
-    val_labels_root: str
-
-    img_proc_params: list
-
-    train_batch_size: list
-    val_batch_size: int
-    backbone_lr: Tuple[float, float]
-    head_lr: Tuple[float, float]
-    weight_decay: Tuple[float, float]
-
-    max_iters: int
-    val_interval: int
-
-    rcs_temperature: float
-    image_scale: Tuple[int, int]
-    crop_size: Tuple[int, int]
     random_resize_ratio: Tuple[float, float]
 
     seed: int

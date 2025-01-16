@@ -34,12 +34,22 @@ class LoadImg:
         self.to_rgb = to_rgb
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        image = cv2.imread(data["img_path"])
+        image = cv2.imread(data["img_path"], cv2.IMREAD_UNCHANGED)
+        if image.shape[2] == 4:
+            image = image[:, :, :3]
         if self.to_rgb:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        data["img"] = F.to_tensor(image)
+        # data["img"] = F.to_tensor(image)
+        data["img"] = image
         return data
 
+class ToTensor:
+    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        if "imgs" in data:
+            data['imgs'] = [F.to_tensor(img) for img in data["imgs"]]
+        elif "img" in data:
+            data["img"] = F.to_tensor(data["img"])
+        return data
 
 class NDArrayImgToTensor:
     def __init__(self, to_rgb: bool = True) -> None:
@@ -55,7 +65,6 @@ class NDArrayImgToTensor:
 class LoadAnn:
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         ann = Image.open(data["ann_path"])
-        print(ann.mode)
         data["ann"] = torch.from_numpy(np.asarray(ann).copy())[None, :].long()
         return data
 
@@ -74,33 +83,18 @@ class Resize:
         self.antialias = antialias
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        if "img" in data:
+        if "imgs" in data:
+            _image_scale = (
+                self.image_scale if self.image_scale else data["imgs"][0].shape[-2:]
+            )
+
+            data["imgs"] = [F.resize(img, _image_scale, antialias=self.antialias) for img in data["imgs"]]
+        elif "img" in data:
             _image_scale = (
                 self.image_scale if self.image_scale else data["img"].shape[-2:]
             )
 
             data["img"] = F.resize(data["img"], _image_scale, antialias=self.antialias)
-
-        if "img0" in data:
-            _image_scale = (
-                self.image_scale if self.image_scale else data["img0"].shape[-2:]
-            )
-
-            data["img0"] = F.resize(data["img0"], _image_scale, antialias=self.antialias)
-        
-        if "img1" in data:
-            _image_scale = (
-                self.image_scale if self.image_scale else data["img1"].shape[-2:]
-            )
-
-            data["img1"] = F.resize(data["img1"], _image_scale, antialias=self.antialias)
-
-        if "img2" in data:
-            _image_scale = (
-                self.image_scale if self.image_scale else data["img2"].shape[-2:]
-            )
-
-            data["img2"] = F.resize(data["img2"], _image_scale, antialias=self.antialias)
 
         if "ann" in data:
             _image_scale = (
@@ -212,24 +206,13 @@ class RandomResizeCrop:
                     interpolation=F.InterpolationMode.NEAREST,
                 ).squeeze()[y0 : y0 + crop_size[0], x0 : x0 + crop_size[1]]
 
-        if "img" in data:
+        if "imgs" in data:
+            data["imgs"] = [F.resize(
+                img, (height, width), antialias=self.antialias
+            )[:, y0 : y0 + crop_size[0], x0 : x0 + crop_size[1]] for img in data["imgs"]]
+        elif "img" in data:
             data["img"] = F.resize(
                 data["img"], (height, width), antialias=self.antialias
-            )[:, y0 : y0 + crop_size[0], x0 : x0 + crop_size[1]]
-
-        if "img0" in data:
-            data["img0"] = F.resize(
-                data["img0"], (height, width), antialias=self.antialias
-            )[:, y0 : y0 + crop_size[0], x0 : x0 + crop_size[1]]
-        
-        if "img1" in data:
-            data["img1"] = F.resize(
-                data["img1"], (height, width), antialias=self.antialias
-            )[:, y0 : y0 + crop_size[0], x0 : x0 + crop_size[1]]
-        
-        if "img2" in data:
-            data["img2"] = F.resize(
-                data["img2"], (height, width), antialias=self.antialias
             )[:, y0 : y0 + crop_size[0], x0 : x0 + crop_size[1]]
 
         data["height"] = height
@@ -250,14 +233,10 @@ class Normalize:
         self.std = std
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        if "img" in data:
+        if "imgs" in data:
+            data["imgs"] = [F.normalize(img, self.mean, self.std) for img in data["imgs"]]
+        elif "img" in data:
             data["img"] = F.normalize(data["img"], self.mean, self.std)
-        if "img0" in data:
-            data["img0"] = F.normalize(data["img0"], self.mean, self.std)
-        if "img1" in data:
-            data["img1"] = F.normalize(data["img1"], self.mean, self.std)
-        if "img2" in data:
-            data["img2"] = F.normalize(data["img2"], self.mean, self.std)
 
         return data
 
@@ -274,14 +253,10 @@ class ColorJitter:
         self.jitter = T.ColorJitter(brightness, contrast, saturation, hue)
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        if "img" in data:
+        if "imgs" in data:
+            data["imgs"] = [self.jitter(img) for img in data["imgs"]]
+        elif "img" in data:
             data["img"] = self.jitter(data["img"])
-        if "img0" in data:
-            data["img0"] = self.jitter(data["img0"])
-        if "img1" in data:
-            data["img1"] = self.jitter(data["img1"])
-        if "img2" in data:
-            data["img2"] = self.jitter(data["img2"])
 
         return data
 
@@ -292,22 +267,14 @@ class WeakAndStrong:
         self.strong = strong_transform
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        if "img" in data:
+        if "imgs" in data:
+            weak_imgs = self.weak.transform(data)["imgs"]
+            data["strong_imgs"] = self.strong.transform(data)["imgs"]
+            data["imgs"] = weak_imgs
+        elif "img" in data:
             weak_img = self.weak.transform(data)["img"]
             data["strong_img"] = self.strong.transform(data)["img"]
             data["img"] = weak_img
-        if "img0" in data:
-            weak_img = self.weak.transform(data)["img0"]
-            data["strong_img0"] = self.strong.transform(data)["img0"]
-            data["img0"] = weak_img
-        if "img1" in data:
-            weak_img = self.weak.transform(data)["img1"]
-            data["strong_img1"] = self.strong.transform(data)["img1"]
-            data["img1"] = weak_img
-        if "img2" in data:
-            weak_img = self.weak.transform(data)["img2"]
-            data["strong_img2"] = self.strong.transform(data)["img2"]
-            data["img2"] = weak_img
 
         return data
 
@@ -318,14 +285,11 @@ class RandomGaussian:
         self.kernel_size = kernel_size
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        if random.random() >= self.p and "img" in data:
-            data["img"] = F.gaussian_blur(data["img"], self.kernel_size)
-        if random.random() >= self.p and "img0" in data:
-            data["img0"] = F.gaussian_blur(data["img0"], self.kernel_size)
-        if random.random() >= self.p and "img1" in data:
-            data["img1"] = F.gaussian_blur(data["img1"], self.kernel_size)
-        if random.random() >= self.p and "img2" in data:
-            data["img2"] = F.gaussian_blur(data["img2"], self.kernel_size)
+        if random.random() >= self.p:
+            if "imgs" in data:
+                data["imgs"] = [F.gaussian_blur(img, self.kernel_size) for img in data["imgs"]]
+            elif "img" in data:
+                data["img"] = F.gaussian_blur(data["img"], self.kernel_size)
 
         return data
 
@@ -336,14 +300,10 @@ class RandomHorizontalFlip:
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         if random.random() > self.p:
-            if "img" in data:
+            if "imgs" in data:
+                data["imgs"] = [F.hflip(img) for img in data["imgs"]]
+            elif "img" in data:
                 data["img"] = F.hflip(data["img"])
-            if "img0" in data:
-                data["img0"] = F.hflip(data["img0"])
-            if "img1" in data:
-                data["img1"] = F.hflip(data["img1"])
-            if "img2" in data:
-                data["img2"] = F.hflip(data["img2"])
 
             if "ann" in data:
                 data["ann"] = F.hflip(data["ann"][:, None, :])[:, 0]
@@ -362,23 +322,65 @@ class RandomErase:
         self.erase = T.RandomErasing(p, scale, ratio, value)
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        if "erased img" in data or "erased img0" in data:
-            if "erased img" in data:
-                data["erased img"] = self.erase(data["erased img"])
-            if "erased img0" in data:
-                data["erased img0"] = self.erase(data["erased img0"])
-            if "erased img1" in data:
-                data["erased img1"] = self.erase(data["erased img1"])
-            if "erased img2" in data:
-                data["erased img2"] = self.erase(data["erased img2"])
+        img_p = data["imgs"][0] if "imgs" in data else data["img"]
+        x, y, h, w, v = self.erase.get_params(img_p, self.erase.scale, self.erase.ratio, self.erase.value)
+        if "erased img" in data or "erased imgs" in data:
+            if "erased imgs" in data:
+                data["erased imgs"] = [F.erase(img, x, y, h, w, v, self.erase.inplace) for img in data["erased imgs"]]
+            elif "erased img" in data:
+                data["erased img"] = F.erase(data["erased img"], x, y, h, w, v, self.erase.inplace)
         else:
-            if "img" in data:
-                data["erased img"] = self.erase(data["img"])
-            if "img0" in data:
-                data["erased img0"] = self.erase(data["img0"])
-            if "img1" in data:
-                data["erased img1"] = self.erase(data["img1"])
-            if "img2" in data:
-                data["erased img2"] = self.erase(data["img2"])
+            if "erased imgs" in data:
+                data["erased imgs"] = [F.erase(img, x, y, h, w, v, self.erase.inplace) for img in data["imgs"]]
+            elif "erased img" in data:
+                data["erased img"] = F.erase(data["img"], x, y, h, w, v, self.erase.inplace)
+
+        return data
+        
+
+class ContrastStretch:
+    def __init__(
+        self,
+        max_intensity: float,
+        function_name: str,
+        parameter
+    ) -> None:
+        self.max_intensity = max_intensity
+        self.function_name = function_name
+        self.parameter = parameter
+    
+    def sigmoid(self, values, power):
+        xp = np.power(values, power)
+        xip = np.power(1.0 - values, power)
+        return xp / (xp + xip)
+    
+    def asym_sigmoid(self, values, params: Tuple[float, float]):
+        power, pivot = params
+        y = values.copy()
+        y[values <= pivot] = pivot * np.power(values[values <= pivot] / pivot, power)
+        rpivot = 1.0 - pivot
+        y[values > pivot] = 1.0 - rpivot * np.power((1.0 - values[values > pivot]) / rpivot, power)
+        return y
+    
+    def log(self, value, alpha):
+        y = np.log1p(alpha * value)
+        y = y / np.max(y)
+        return y
+    
+    def exp(self, value, power):
+        y = np.power(value, power)
+        return y
+
+    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        func = getattr(self, self.function_name, None)
+        assert callable(func), f'There is no {self.function_name} transform in transform.py!'
+        img = data["img"].copy().astype(np.float32)
+        img /= self.max_intensity
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+        img_lst = list() if "imgs" not in data else data["imgs"]
+        self.parameter = tuple(self.parameter) if type(self.parameter) == list else self.parameter
+        img[:, :, 2] = func(img[:, :, 2], self.parameter)
+        img_lst.append((cv2.cvtColor(img, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8))
+        data["imgs"] = img_lst
 
         return data

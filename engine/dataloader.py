@@ -100,141 +100,20 @@ class RLMD(Dataset):
             img_path = f'{self.img_dir}/{stem.split("/")[-1][:-4]}.jpg'
             ann_path = stem
 
-        image = Image.open(img_path)
-        ann = Image.open(ann_path)
-        assert image.mode=='RGB' and ann.mode=='P'
-
         transform_dict = self.transforms.transform(
             {
-                "img": F.to_tensor(image),
-                "ann": torch.from_numpy(np.asarray(ann).copy())[None, :].long()
+                "img_path": img_path,
+                "ann_path": ann_path
             }
         )
         
-        image = transform_dict["img"]
+        imgs = transform_dict["imgs"] if "imgs" in transform_dict else [transform_dict["img"]]
         ann = transform_dict["ann"]
 
-        return image, ann
+        return imgs, ann
     
-class RLMD_NLCS2(Dataset):
-    def __init__(self, img_dir: str, ann_dir: str, rcm: Optional[RareCategoryManager], transforms: List[Transform], parameters: List[float]):
-        self.img_paths = list()
-        self.ann_paths = list()
-        if rcm == None:
-            for file in os.listdir(img_dir):
-                if os.path.exists(f'{img_dir}/{file}') == True and os.path.exists(f'{ann_dir}/{file[:-4]}.png') == True:
-                    self.img_paths.append(f'{img_dir}/{file}')
-                    self.ann_paths.append(f'{ann_dir}/{file[:-4]}.png')
-        self.img_dir = img_dir
-        self.ann_dir = ann_dir
-        self.rcm = rcm
-        self.transforms = Composition(transforms)
-        self.alpha = parameters[0]
-        self.power = parameters[1]
-
-    def __len__(self):
-        if self.rcm == None:
-            return len(self.img_paths)
-        else:
-            return self.rcm.length
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        if self.rcm == None:
-            img_path = self.img_paths[idx]
-            ann_path = self.ann_paths[idx]
-        else:
-            random_cat_id = self.rcm.get_rare_cat_id()
-            stems = self.rcm.get_stems(random_cat_id)
-            stem = random.choice(stems)
-            stems.remove(stem)
-            img_path = f'{self.img_dir}/{stem.split("/")[-1][:-4]}.jpg'
-            ann_path = stem
-
-        # image = Image.open(img_path)
-        image = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
-        image = image.astype(np.float32) / 255.0
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        # v0 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot0)
-        # v1 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot1)
-        v0 = non_linear_contrast_stretching_log(image[:, :, 2], self.alpha)
-        v1 = non_linear_contrast_stretching_exp(image[:, :, 2], self.power)
-        image0, image1 = image.copy(), image.copy()
-        image0[:, :, 2] = v0
-        image1[:, :, 2] = v1
-        image0 = (cv2.cvtColor(image0, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8)
-        image1 = (cv2.cvtColor(image1, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8)
-        ann = Image.open(ann_path)
-
-        transform_dict = self.transforms.transform(
-            {
-                "img0": F.to_tensor(image0),
-                "img1": F.to_tensor(image1),
-                "ann": torch.from_numpy(np.asarray(ann).copy())[None, :].long()
-            }
-        )
-        
-        images = [
-            transform_dict["img0"],
-            transform_dict["img1"]
-        ]
-        ann = transform_dict["ann"]
-
-        return images, ann
-    
-class CityscapesHDR_GC3(Dataset):
-    def __init__(self, img_dir, ann_dir, transforms: List[Transform], gamma: List[float]):
-        super().__init__()
-        self.img_paths = list()
-        self.ann_paths = list()
-        for folder in os.listdir(img_dir):
-            for file in os.listdir(f'{img_dir}/{folder}'):
-                if os.path.exists(f'{img_dir}/{folder}/{file}') == True and os.path.exists(f'{ann_dir}/{folder}/{file[:-17]}_gtFine_labelTrainIds.png') == True:
-                    self.img_paths.append(f'{img_dir}/{folder}/{file}')
-                    self.ann_paths.append(f'{ann_dir}/{folder}/{file[:-17]}_gtFine_labelTrainIds.png')
-        self.transforms = Composition(transforms)
-        self.gamma = gamma
-
-    def __len__(self):
-        return len(self.img_paths)
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        image = cv2.imread(self.img_paths[idx], cv2.IMREAD_UNCHANGED)
-        image0 = np.power(image / 65535.0, self.gamma[0]) * 255.0
-        image1 = np.power(image / 65535.0, self.gamma[1]) * 255.0
-        image2 = np.power(image / 65535.0, self.gamma[2]) * 255.0
-        image0 = cv2.cvtColor(image0.astype(np.uint8), cv2.COLOR_BGR2RGB)
-        image1 = cv2.cvtColor(image1.astype(np.uint8), cv2.COLOR_BGR2RGB)
-        image2 = cv2.cvtColor(image2.astype(np.uint8), cv2.COLOR_BGR2RGB)
-
-        #image = Image.open(self.img_paths[idx]).convert('RGB')
-        ann = Image.open(self.ann_paths[idx])
-        
-        transform_dict = self.transforms.transform(
-            {
-                "img0": F.to_tensor(image0),
-                "img1": F.to_tensor(image1),
-                "img2": F.to_tensor(image2),
-                "ann": torch.from_numpy(np.asarray(ann).copy())[None, :].long()
-            }
-        )
-
-        images = [
-            transform_dict["img0"],
-            transform_dict["img1"],
-            transform_dict["img2"]
-        ]
-        ann = transform_dict["ann"]
-
-        return images, ann
-
-class CityscapesHDR_NLCS2(Dataset):
-    def __init__(self, img_dir: str, ann_dir: str, rcm: Optional[RareCategoryManager], transforms: List[Transform], parameters: List[float]):
+class CityscapesHDR(Dataset):
+    def __init__(self, img_dir: str, ann_dir: str, rcm: Optional[RareCategoryManager], transforms: List[Transform]):
         super().__init__()
         self.img_paths = list()
         self.ann_paths = list()
@@ -248,11 +127,6 @@ class CityscapesHDR_NLCS2(Dataset):
         self.ann_dir = ann_dir
         self.rcm = rcm
         self.transforms = Composition(transforms)
-        self.alpha = parameters[0]
-        self.power = parameters[1]
-        # self.power = parameters[0]
-        # self.pivot0 = parameters[1]
-        # self.pivot1 = parameters[2]
 
     def __len__(self):
         if self.rcm == None:
@@ -274,38 +148,18 @@ class CityscapesHDR_NLCS2(Dataset):
             stems.remove(stem)
             img_path = f'{self.img_dir}/{stem.split("/")[-1].split("_")[0]}/{stem.split("/")[-1].replace("gtFine_labelTrainIds", "leftImg16bit")}'
             ann_path = stem
-
-        image = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
-        image = image.astype(np.float32) / 65535
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        # v0 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot0)
-        # v1 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot1)
-        v0 = non_linear_contrast_stretching_log(image[:, :, 2], self.alpha)
-        v1 = non_linear_contrast_stretching_exp(image[:, :, 2], self.power)
-        image0, image1 = image.copy(), image.copy()
-        image0[:, :, 2] = v0
-        image1[:, :, 2] = v1
-        image0 = (cv2.cvtColor(image0, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8)
-        image1 = (cv2.cvtColor(image1, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8)
-
-        #image = Image.open(img_path.convert('RGB')
-        ann = Image.open(ann_path)
         
         transform_dict = self.transforms.transform(
             {
-                "img0": F.to_tensor(image0),
-                "img1": F.to_tensor(image1),
-                "ann": torch.from_numpy(np.asarray(ann).copy())[None, :].long()
+                "img_path": img_path,
+                "ann_path": ann_path
             }
         )
 
-        images = [
-            transform_dict["img0"],
-            transform_dict["img1"]
-        ]
+        imgs = transform_dict["imgs"] if "imgs" in transform_dict else [transform_dict["img"]]
         ann = transform_dict["ann"]
 
-        return images, ann
+        return imgs, ann
 
 class CityscapesLDR(Dataset):
     def __init__(self, img_dir, ann_dir, rcm: Optional[RareCategoryManager], transforms: List[Transform]):
@@ -344,99 +198,29 @@ class CityscapesLDR(Dataset):
             stems.remove(stem)
             img_path = f'{self.img_dir}/{stem.split("/")[-1].split("_")[0]}/{stem.split("/")[-1].replace("gtFine_labelTrainIds", "leftImg8bit")}'
             ann_path = stem
-
-        image = cv2.imread(img_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        #image = Image.open(self.img_paths[idx]).convert('RGB')
-        ann = Image.open(ann_path)
         
         transform_dict = self.transforms.transform(
             {
-                "img": F.to_tensor(image),
-                "ann": torch.from_numpy(np.asarray(ann).copy())[None, :].long()
+                "img_path": img_path,
+                "ann_path": ann_path
             }
         )
 
-        image = transform_dict["img"]
+        imgs = transform_dict["imgs"] if "imgs" in transform_dict else [transform_dict["img"]]
         ann = transform_dict["ann"]
 
-        return image, ann
-
-class CityscapesLDR_NLCS2(Dataset):
-    def __init__(self, img_dir: str, ann_dir: str, rcm: Optional[RareCategoryManager], transforms: List[Transform], parameters: List[float]):
-        super().__init__()
-        self.img_paths = list()
-        self.ann_paths = list()
-        if rcm == None:
-            for folder in os.listdir(img_dir):
-                for file in os.listdir(f'{img_dir}/{folder}'):
-                    prefix = '_'.join(file.split("_")[:-1])
-                    if os.path.exists(f'{img_dir}/{folder}/{file}') == True and os.path.exists(f'{ann_dir}/{folder}/{prefix}_gtFine_labelTrainIds.png') == True:
-                        self.img_paths.append(f'{img_dir}/{folder}/{file}')
-                        self.ann_paths.append(f'{ann_dir}/{folder}/{prefix}_gtFine_labelTrainIds.png')
-        self.img_dir = img_dir
-        self.ann_dir = ann_dir
-        self.rcm = rcm
-        self.transforms = Composition(transforms)
-        self.alpha = parameters[0]
-        self.power = parameters[1]
-        # self.power = parameters[0]
-        # self.pivot0 = parameters[1]
-        # self.pivot1 = parameters[2]
-
-    def __len__(self):
-        if self.rcm == None:
-            return len(self.img_paths)
-        else:
-            return self.rcm.length
-
-    def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
-
-        if self.rcm == None:
-            img_path = self.img_paths[idx]
-            ann_path = self.ann_paths[idx]
-        else:
-            random_cat_id = self.rcm.get_rare_cat_id()
-            stems = self.rcm.get_stems(random_cat_id)
-            stem = random.choice(stems)
-            stems.remove(stem)
-            img_path = f'{self.img_dir}/{stem.split("/")[-1].split("_")[0]}/{stem.split("/")[-1].replace("gtFine_labelTrainIds", "leftImg8bit")}'
-            ann_path = stem
-
-        image = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
-        image = image.astype(np.float32) / 255
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        # v0 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot0)
-        # v1 = non_linear_contrast_stretching_asymmetric(image[:, :, 2], self.power, self.pivot1)
-        v0 = non_linear_contrast_stretching_log(image[:, :, 2], self.alpha)
-        v1 = non_linear_contrast_stretching_exp(image[:, :, 2], self.power)
-        image0, image1 = image.copy(), image.copy()
-        image0[:, :, 2] = v0
-        image1[:, :, 2] = v1
-        image0 = (cv2.cvtColor(image0, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8)
-        image1 = (cv2.cvtColor(image1, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8)
-
-        #image = Image.open(img_path.convert('RGB')
-        ann = Image.open(ann_path)
-        
-        transform_dict = self.transforms.transform(
-            {
-                "img0": F.to_tensor(image0),
-                "img1": F.to_tensor(image1),
-                "ann": torch.from_numpy(np.asarray(ann).copy())[None, :].long()
-            }
-        )
-
-        images = [
-            transform_dict["img0"],
-            transform_dict["img1"]
-        ]
-        ann = transform_dict["ann"]
-
-        return images, ann
+        return imgs, ann
+    
+def get_dataset(
+    dataset_name: str,
+    img_dir: str,
+    ann_dir: str,
+    rcm: Optional[RareCategoryManager],
+    transforms: List[Transform]
+):
+    dataset = globals().get(dataset_name)
+    assert dataset, f"There is no {dataset} dataset in datakiader.py!"
+    return dataset(img_dir, ann_dir, rcm, transforms)
 
 class InfiniteDataloader:
     def __init__(

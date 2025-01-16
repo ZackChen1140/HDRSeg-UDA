@@ -96,7 +96,7 @@ class Validator:
                 y1 = max(y2 - h_crop, 0)
                 x1 = max(x2 - w_crop, 0)
                 inputs = [image[:, :, y1:y2, x1:x2] for image in images]
-                upsampled_logits, _ = self.model.forward(inputs=inputs)
+                upsampled_logits, _ = self.model.forward(images=inputs)
                 preds += F.pad(
                     upsampled_logits,
                     (int(x1), int(preds.shape[3] - x2), int(y1), int(preds.shape[2] - y2)),

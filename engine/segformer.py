@@ -13,13 +13,13 @@ class MultiPathSegformer(nn.Module):
         self.config = config
     def forward(
         self, 
-        inputs: List[torch.FloatTensor],
-        labels: Optional[torch.LongTensor] = None,
+        images: List[torch.FloatTensor],
+        label: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
     ):
-        pixel_values0 = inputs[0]
-        pixel_values1 = inputs[1]
-        pixel_values2 = inputs[2]
+        pixel_values0 = images[0]
+        pixel_values1 = images[1]
+        pixel_values2 = images[2]
         encoder_hidden_states = self.encoder.forward(
             pixel_values0=pixel_values0,
             pixel_values1=pixel_values1,
@@ -31,16 +31,16 @@ class MultiPathSegformer(nn.Module):
         
         loss = None
         upsampled_logits = nn.functional.interpolate(
-            logits, size=inputs[0].shape[-2:], mode="bilinear"
+            logits, size=images[0].shape[-2:], mode="bilinear"
         )
-        if labels is not None:
+        if label is not None:
             if self.config.num_labels > 1:
                 loss_fct = nn.CrossEntropyLoss(ignore_index=self.config.semantic_loss_ignore_index)
-                loss = loss_fct(upsampled_logits, labels)
+                loss = loss_fct(upsampled_logits, label)
             elif self.config.num_labels == 1:
-                valid_mask = ((labels >= 0) & (labels != self.config.semantic_loss_ignore_index)).float()
+                valid_mask = ((label >= 0) & (label != self.config.semantic_loss_ignore_index)).float()
                 loss_fct = nn.BCEWithLogitsLoss(reduction="none")
-                loss = loss_fct(upsampled_logits.squeeze(1), labels.float())
+                loss = loss_fct(upsampled_logits.squeeze(1), label.float())
                 loss = (loss * valid_mask).mean()
         
         return upsampled_logits, loss
@@ -122,12 +122,13 @@ class DualPathSegformer(nn.Module):
         self.config = config
     def forward(
         self, 
-        inputs: List[torch.FloatTensor],
-        labels: Optional[torch.LongTensor] = None,
+        images: List[torch.Tensor],
+        label: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
     ):
-        pixel_values0 = inputs[0]
-        pixel_values1 = inputs[1]
+        assert len(images) == 2, f"The number of input images should be 2 but getting {len(images)}."
+        pixel_values0 = images[0]
+        pixel_values1 = images[1]
         encoder_hidden_states = self.encoder.forward(
             pixel_values0=pixel_values0,
             pixel_values1=pixel_values1,
@@ -138,16 +139,16 @@ class DualPathSegformer(nn.Module):
         
         loss = None
         upsampled_logits = nn.functional.interpolate(
-            logits, size=inputs[0].shape[-2:], mode="bilinear", align_corners=False
+            logits, size=images[0].shape[-2:], mode="bilinear", align_corners=False
         )
-        if labels is not None:
+        if label is not None:
             if self.config.num_labels > 1:
                 loss_fct = nn.CrossEntropyLoss(ignore_index=self.config.semantic_loss_ignore_index)
-                loss = loss_fct(upsampled_logits, labels)
+                loss = loss_fct(upsampled_logits, label)
             elif self.config.num_labels == 1:
-                valid_mask = ((labels >= 0) & (labels != self.config.semantic_loss_ignore_index)).float()
+                valid_mask = ((label >= 0) & (label != self.config.semantic_loss_ignore_index)).float()
                 loss_fct = nn.BCEWithLogitsLoss(reduction="none")
-                loss = loss_fct(upsampled_logits.squeeze(1), labels.float())
+                loss = loss_fct(upsampled_logits.squeeze(1), label.float())
                 loss = (loss * valid_mask).mean()
         
         return upsampled_logits, loss
@@ -235,13 +236,13 @@ class Segformer(SegformerForSemanticSegmentation):
         self,
         images: List[torch.Tensor],
         label: torch.Tensor = None
-        ):
+    ):
 
         logits = super().forward(images[0])['logits']
+        loss = None
         upsampled_logits = nn.functional.interpolate(
             logits, size=images[0].shape[-2:], mode="bilinear", align_corners=False
         )
-
         if label is not None:
             if self.config.num_labels > 1:
                 loss_fct = nn.CrossEntropyLoss(ignore_index=self.config.semantic_loss_ignore_index)
@@ -253,3 +254,8 @@ class Segformer(SegformerForSemanticSegmentation):
                 loss = (loss * valid_mask).mean()
 
         return upsampled_logits, loss
+    
+def get_model(model_name: str, config: SegformerConfig):
+    model = globals().get(model_name)
+    assert model, f"There is no {model_name} model in segformer.py!"
+    return model(config)

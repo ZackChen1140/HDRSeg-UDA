@@ -15,8 +15,8 @@ import evaluate
 
 from transformers import SegformerConfig
 
-from engine.segformer import MultiPathSegformer, DualPathSegformer
-from engine.dataloader import RLMD_NLCS2, CityscapesLDR_NLCS2, CityscapesHDR_NLCS2, CityscapesHDR_GC3, InfiniteDataloader, RareCategoryManager
+from engine.segformer import get_model
+from engine.dataloader import get_dataset, RareCategoryManager, InfiniteDataloader
 from engine.category import Category
 from engine import transform
 from engine.misc import set_seed
@@ -39,18 +39,36 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
     rcm = RareCategoryManager(categories, cfg.rcs_path, cfg.rcs_temperature) if cfg.rcs_path != "" else None
 
     train_transforms = [
+        transform.LoadImg(),
+        transform.LoadAnn(),
+        *[transform.ContrastStretch(
+                max_intensity=cfg.max_intensity,
+                function_name=cfg.contrast_stretch[idx],
+                parameter=cfg.img_proc_params[idx]
+            ) for idx in range(0, len(cfg.contrast_stretch))
+        ],
+        transform.ToTensor(),
         transform.RandomResizeCrop(cfg.image_scale, cfg.random_resize_ratio, cfg.crop_size),
         transform.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.1),
         transform.RandomGaussian(kernel_size=5),
         transform.Normalize(),
     ]
     val_transforms = [
+        transform.LoadImg(),
+        transform.LoadAnn(),
+        *[transform.ContrastStretch(
+                max_intensity=cfg.max_intensity,
+                function_name=cfg.contrast_stretch[idx],
+                parameter=cfg.img_proc_params[idx]
+            ) for idx in range(0, len(cfg.contrast_stretch))
+        ],
+        transform.ToTensor(),
         transform.Resize(cfg.image_scale),
         transform.Normalize(),
     ]
-
-    train_dataset = CityscapesHDR_NLCS2(img_dir=cfg.train_images_root, ann_dir=cfg.train_labels_root, rcm=rcm, transforms=train_transforms, parameters=cfg.img_proc_params)
-    val_dataset = CityscapesHDR_NLCS2(img_dir=cfg.val_images_root, ann_dir=cfg.val_labels_root, rcm=None, transforms=val_transforms, parameters=cfg.img_proc_params)
+    
+    train_dataset = get_dataset(dataset_name=cfg.dataset, img_dir=cfg.train_images_root, ann_dir=cfg.train_labels_root, rcm=rcm, transforms=train_transforms)
+    val_dataset = get_dataset(dataset_name=cfg.dataset, img_dir=cfg.val_images_root, ann_dir=cfg.val_labels_root, rcm=None, transforms=val_transforms)
 
     train_dataloader = InfiniteDataloader(
         dataset=train_dataset,
@@ -72,9 +90,9 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
     metric = evaluate.load("mean_iou", keep_in_memory=True)
 
     segconfig = SegformerConfig().from_pretrained("nvidia/mit-b0")
-    segconfig.num_labels = 19
+    segconfig.num_labels = len(categories)
     
-    model = DualPathSegformer(segconfig)
+    model = get_model(cfg.model, segconfig)
 
     optimizer = optim.AdamW(
         [
@@ -100,7 +118,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         model.load_state_dict(ckpt['model_state_dict'])
         model.to(device)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        scheduler.load_state_dict(ckpt["scheduler"])
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         last_best = ckpt['best_miou']
         last_iteration = ckpt['iteration']
     else:
@@ -117,8 +135,8 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         inputs, labels = [im.to(device) for im in inputs], labels.to(device)
 
         upsampled_logits, loss = model.forward(
-            inputs=inputs,
-            labels=labels
+            images=inputs,
+            label=labels
         )
         predicted = upsampled_logits.argmax(dim=1)
 
@@ -153,42 +171,6 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         if iter % cfg.val_interval == 0:
             model.eval()
             with torch.no_grad():
-                # val_batch = 0.0
-                # iou_list = None
-                # batch_list = None
-                # for inputs, labels in val_dataloader:
-                #     inputs, labels = [im.to(device) for im in inputs], labels.to(device)
-
-                #     upsampled_logits, loss = model.forward(
-                #         inputs=inputs,
-                #         labels=labels
-                #     )
-                #     predicted = upsampled_logits.argmax(dim=1)
-                #     metrics = metric._compute(
-                #         predictions=predicted.cpu(),
-                #         references=labels.cpu(),
-                #         num_labels=segconfig.num_labels,
-                #         ignore_index=255,
-                #         reduce_labels=False,
-                #     )
-                #     val_batch += 1
-                #     batch_loss += loss.item()
-                #     batch_miou += metrics['mean_iou']
-                #     batch_acc += metrics['mean_accuracy']
-                #     if iou_list == None:
-                #         iou_list = metrics['per_category_iou'].tolist()
-                #         batch_list = [0.0 if math.isnan(v) else 1.0 for v in iou_list]
-                #     else:
-                #         for idx, iou in enumerate(metrics['per_category_iou'].tolist()):
-                #             if not math.isnan(iou):
-                #                 iou_list[idx] = iou if math.isnan(iou_list[idx]) else iou_list[idx] + iou
-                #                 batch_list[idx] += 1
-
-                # val_loss = batch_loss / val_batch
-                # val_miou = batch_miou / val_batch
-                # val_acc = batch_acc / val_batch
-                # iou_list = [v / b for v, b in zip(iou_list, batch_list)]
-                # batch_loss, batch_miou, batch_acc = 0, 0, 0
                 val_loss, val_miou, val_acc, iou_list = validator.validate()
 
                 checkpoint = {
