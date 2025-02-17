@@ -33,7 +33,8 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
     categories = Category.load(cfg.category_csv)
     writer = SummaryWriter(tb_dir)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device_name = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device_name)
     set_seed(cfg.seed)
 
     rcm = RareCategoryManager(categories, cfg.rcs_path, cfg.rcs_temperature) if cfg.rcs_path != "" else None
@@ -111,18 +112,17 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         milestones=[1500]
     )
 
-    scalar = torch.GradScaler(device=device)
+    scalar = torch.GradScaler(device=device_name)
 
+    model.to(device)
+    torch.compile(model)
     if checkpoint is not None:
         ckpt = torch.load(checkpoint)
         model.load_state_dict(ckpt['model_state_dict'])
-        model.to(device)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         last_best = ckpt['best_miou']
         last_iteration = ckpt['iteration']
-    else:
-        model.to(device)
 
     best_miou = 0 if checkpoint is None else last_best
     begin_iter = 0 if checkpoint is None else last_iteration
@@ -134,10 +134,11 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         inputs, labels = next(train_dataloader)
         inputs, labels = [im.to(device) for im in inputs], labels.to(device)
 
-        upsampled_logits, loss = model.forward(
-            images=inputs,
-            label=labels
-        )
+        with torch.autocast(device_type=device_name):
+            upsampled_logits, loss = model.forward(
+                images=inputs,
+                label=labels
+            )
         predicted = upsampled_logits.argmax(dim=1)
 
         scalar.scale(loss).backward()
@@ -145,17 +146,16 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         scalar.update()
         scheduler.step()
 
-        with torch.no_grad():
-            metrics = metric._compute(
-                predictions=predicted.cpu(),
-                references=labels.cpu(),
-                num_labels=segconfig.num_labels,
-                ignore_index=255,
-                reduce_labels=False,
-            )
-            batch_miou += metrics['mean_iou']
-            batch_acc += metrics['mean_accuracy']
-            batch_loss += loss.item()
+        metrics = metric._compute(
+            predictions=predicted.cpu(),
+            references=labels.cpu(),
+            num_labels=segconfig.num_labels,
+            ignore_index=255,
+            reduce_labels=False,
+        )
+        batch_miou += metrics['mean_iou']
+        batch_acc += metrics['mean_accuracy']
+        batch_loss += loss.item()
 
         if iter % cfg.train_interval == 0:
             train_loss = batch_loss / cfg.train_interval
@@ -170,7 +170,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         
         if iter % cfg.val_interval == 0:
             model.eval()
-            with torch.no_grad():
+            with torch.no_grad(), torch.autocast(device_type=device_name):
                 val_loss, val_miou, val_acc, iou_list = validator.validate()
 
                 checkpoint = {
