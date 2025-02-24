@@ -70,9 +70,11 @@ class RLMD(Dataset):
         self.ann_paths = list()
         if rcm == None:
             for file in os.listdir(img_dir):
-                if os.path.exists(f'{img_dir}/{file}') == True and os.path.exists(f'{ann_dir}/{file[:-4]}.png') == True:
-                    self.img_paths.append(f'{img_dir}/{file}')
-                    self.ann_paths.append(f'{ann_dir}/{file[:-4]}.png')
+                self.img_paths.append(f'{img_dir}/{file}')
+                self.ann_paths.append(f'{ann_dir}/{file[:-4]}.png')
+                if ann_dir != None and os.path.exists(f'{ann_dir}/{file[:-4]}.png') == False:
+                    self.img_paths.pop()
+                    self.ann_paths.pop()
         self.img_dir = img_dir
         self.ann_dir = ann_dir
         self.rcm = rcm
@@ -107,7 +109,7 @@ class RLMD(Dataset):
         )
         
         imgs = transform_dict["imgs"] if "imgs" in transform_dict else [transform_dict["img"]]
-        ann = transform_dict["ann"]
+        ann = transform_dict["ann"] if self.ann_dir != None else torch.zeros((1, 1, 1), dtype=torch.long)
 
         return imgs, ann
     
