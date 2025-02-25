@@ -131,13 +131,15 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         model.train()
         optimizer.zero_grad()
 
-        inputs, labels = next(train_dataloader)
-        inputs, labels = [im.to(device) for im in inputs], labels.to(device)
+        data = next(train_dataloader)
+        data = data["imgs"] if "imgs" in data else [data["img"]]
+        ann = data["ann"]
+        imgs, ann = [im.to(device) for im in imgs], ann.to(device)
 
         with torch.autocast(device_type=device_name):
             upsampled_logits, loss = model.forward(
-                images=inputs,
-                label=labels
+                images=imgs,
+                label=ann
             )
         predicted = upsampled_logits.argmax(dim=1)
 
@@ -148,7 +150,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
 
         metrics = metric._compute(
             predictions=predicted.cpu(),
-            references=labels.cpu(),
+            references=ann.cpu(),
             num_labels=segconfig.num_labels,
             ignore_index=255,
             reduce_labels=False,

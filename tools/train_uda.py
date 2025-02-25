@@ -151,7 +151,7 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
         milestones=[1500]
     )
 
-    scalar = torch.GradScaler(device=device_name)
+    scaler = torch.GradScaler(device=device_name)
 
     source_class_weight.to(device)
     target_class_weight.to(device)
@@ -183,21 +183,22 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
         model.train()
         optimizer.zero_grad()
 
-        source_imgs, source_anns = next(source_train_dataloader)
-        source_imgs, source_anns = [im.to(device) for im in source_imgs], source_anns.to(device)
-
+        source_data = next(source_train_dataloader)
+        source_imgs = source_data["imgs"] if "imgs" in source_data else [source_data["img"]]
+        source_ann = source_data["ann"]
+        source_imgs, source_ann = [im.to(device) for im in source_imgs], source_ann.to(device)
         with torch.autocast(device_type=device_name, enabled=cfg.autocast):
             upsampled_logits, source_loss = model.forward(
                 images=source_imgs,
-                label=source_anns
+                label=source_ann
             )
         source_pred = upsampled_logits.argmax(dim=1)
 
-        scalar.scale(source_loss).backward()
+        scaler.scale(source_loss).backward()
 
         metrics = metric._compute(
             predictions=source_pred.cpu(),
-            references=source_anns.cpu(),
+            references=source_ann.cpu(),
             num_labels=segconfig.num_labels,
             ignore_index=255,
             reduce_labels=False,
@@ -206,10 +207,12 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
         source_batch_loss += source_loss.item()
 
         if iter % ema.update_every == 0:
-            target_imgs, _ = next(target_train_dataloader)
-            target_imgs = [im.to(device) for im in source_imgs]
-            # if cfg.num_masks > 0:
-            #     erased_target_img = data["erased img"].cuda()
+            target_data = next(target_train_dataloader)
+            target_imgs = target_data["imgs"] if "imgs" in target_data else [target_data["img"]]
+            target_imgs = [im.to(device) for im in target_imgs]
+            if cfg.num_masks > 0:
+                erased_target_imgs = target_data["erased imgs"] if "erased imgs" in target_data else [target_data["erased img"]]
+                erased_target_imgs = [im.to(device) for im in erased_target_imgs]
 
             # Pseudo labeling for SEMA and compute class-conditional pixel weights for CCDD
             with torch.no_grad(), torch.autocast(device_type=device_name, enabled=cfg.autocast):
@@ -232,7 +235,13 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
             with torch.autocast(device_type=device_name, enabled=cfg.autocast):
                 upsampled_logits, _ = model.forward(images=target_imgs)
                 target_loss = target_criterion.compute(upsampled_logits, target_ann)
-            scalar.scale(target_loss).backward()
+            scaler.scale(target_loss).backward()
+
+            if cfg.num_masks > 0:
+                with torch.autocast(device_type=device_name, enabled=cfg.autocast):
+                    upsampled_logits, _ = model(erased_target_imgs)
+                    erased_target_loss = target_criterion.compute(upsampled_logits, target_ann)
+                scaler.scale(erased_target_loss).backward()
 
             target_batch_num += 1
             target_batch_loss += target_loss.item()
@@ -251,8 +260,8 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
             writer.add_scalar('Target Loss/Train', target_train_loss, iter)
             print(f"[Iter {iter}] Training Source Loss: {source_train_loss}, Source Mean_iou: {source_train_miou}, Target Loss: {target_train_loss}")
         
-        scalar.step(optimizer)
-        scalar.update()
+        scaler.step(optimizer)
+        scaler.update()
         scheduler.step()
 
         if iter % cfg.val_interval == 0:

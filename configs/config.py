@@ -71,6 +71,7 @@ class TrainingConfig_UDA(Serializable):
     crop_size: Tuple[int, int]
     stride: Optional[Tuple[int, int]]
     random_resize_ratio: Tuple[float, float]
+    num_masks: int
 
     seed: int
     num_workers: int

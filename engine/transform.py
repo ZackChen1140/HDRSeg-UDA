@@ -321,19 +321,48 @@ class RandomErase:
     ) -> None:
         self.erase = T.RandomErasing(p, scale, ratio, value)
 
+    def get_params(self, img: torch.Tensor) -> Tuple[int, int, int, int, torch.Tensor]:
+        # cast self.value to script acceptable type
+        if isinstance(self.erase.value, (int, float)):
+            value = [float(self.erase.value)]
+        elif isinstance(self.erase.value, str):
+            value = None
+        elif isinstance(self.erase.value, (list, tuple)):
+            value = [float(v) for v in self.erase.value]
+        else:
+            value = self.erase.value
+
+        if value is not None and not (len(value) in (1, img.shape[-3])):
+            raise ValueError(
+                "If value is a sequence, it should have either a single value or "
+                f"{img.shape[-3]} (number of input channels)"
+            )
+        
+        x, y, h, w, v =  self.erase.get_params(img, scale=self.erase.scale, ratio=self.erase.ratio, value=value)
+        return x, y, h, w, v
+
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         img_p = data["imgs"][0] if "imgs" in data else data["img"]
-        x, y, h, w, v = self.erase.get_params(img_p, self.erase.scale, self.erase.ratio, self.erase.value)
+        x, y, h, w, v = self.get_params(img_p)
+        p = torch.rand(1)
         if "erased img" in data or "erased imgs" in data:
+            if p <= self.erase.p:
+                return data
             if "erased imgs" in data:
                 data["erased imgs"] = [F.erase(img, x, y, h, w, v, self.erase.inplace) for img in data["erased imgs"]]
             elif "erased img" in data:
                 data["erased img"] = F.erase(data["erased img"], x, y, h, w, v, self.erase.inplace)
         else:
-            if "erased imgs" in data:
-                data["erased imgs"] = [F.erase(img, x, y, h, w, v, self.erase.inplace) for img in data["imgs"]]
-            elif "erased img" in data:
-                data["erased img"] = F.erase(data["img"], x, y, h, w, v, self.erase.inplace)
+            if p > self.erase.p:
+                if "imgs" in data:
+                    data["erased imgs"] = [F.erase(img, x, y, h, w, v, self.erase.inplace) for img in data["imgs"]]
+                elif "img" in data:
+                    data["erased img"] = F.erase(data["img"], x, y, h, w, v, self.erase.inplace)
+            else:
+                if "imgs" in data:
+                    data["erased imgs"] = data["imgs"].copy()
+                elif "img" in data:
+                    data["erased img"] = data["img"].copy()
 
         return data
         

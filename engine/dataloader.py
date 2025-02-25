@@ -101,17 +101,12 @@ class RLMD(Dataset):
             img_path = f'{self.img_dir}/{stem.split("/")[-1][:-4]}.jpg'
             ann_path = stem
 
-        transform_dict = self.transforms.transform(
+        return self.transforms.transform(
             {
                 "img_path": img_path,
                 "ann_path": ann_path
             }
         )
-        
-        imgs = transform_dict["imgs"] if "imgs" in transform_dict else [transform_dict["img"]]
-        ann = transform_dict["ann"] if self.ann_dir != None else torch.zeros((1, 1, 1), dtype=torch.long)
-
-        return imgs, ann
     
 class CityscapesHDR(Dataset):
     def __init__(self, img_dir: str, ann_dir: str, rcm: Optional[RareCategoryManager], transforms: List[Transform]):
@@ -150,17 +145,12 @@ class CityscapesHDR(Dataset):
             img_path = f'{self.img_dir}/{stem.split("/")[-1].split("_")[0]}/{stem.split("/")[-1].replace("gtFine_labelTrainIds", "leftImg16bit")}'
             ann_path = stem
         
-        transform_dict = self.transforms.transform(
+        return self.transforms.transform(
             {
                 "img_path": img_path,
                 "ann_path": ann_path
             }
         )
-
-        imgs = transform_dict["imgs"] if "imgs" in transform_dict else [transform_dict["img"]]
-        ann = transform_dict["ann"]
-
-        return imgs, ann
 
 class CityscapesLDR(Dataset):
     def __init__(self, img_dir, ann_dir, rcm: Optional[RareCategoryManager], transforms: List[Transform]):
@@ -200,17 +190,12 @@ class CityscapesLDR(Dataset):
             img_path = f'{self.img_dir}/{stem.split("/")[-1].split("_")[0]}/{stem.split("/")[-1].replace("gtFine_labelTrainIds", "leftImg8bit")}'
             ann_path = stem
         
-        transform_dict = self.transforms.transform(
+        return self.transforms.transform(
             {
                 "img_path": img_path,
                 "ann_path": ann_path
             }
         )
-
-        imgs = transform_dict["imgs"] if "imgs" in transform_dict else [transform_dict["img"]]
-        ann = transform_dict["ann"]
-
-        return imgs, ann
     
 def get_dataset(
     dataset_name: str,

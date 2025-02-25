@@ -35,22 +35,24 @@ class Validator:
         avg_acc = 0
         iou_list = None
         batch_list = None
-        for images, label in self.dataloader:
-            images, label = [images.to(self.device) for images in images], label.to(self.device)
-            logits = self.slide_inference(images=images)
+        for data in self.dataloader:
+            imgs = data["imgs"] if "imgs" in data else [data["img"]]
+            ann = data["ann"]
+            imgs, ann = [im.to(self.device) for im in imgs], ann.to(self.device)
+            logits = self.slide_inference(images=imgs)
             predicted = logits.argmax(dim=1)
             if self.num_classes > 1:
                 loss_fct = torch.nn.CrossEntropyLoss(ignore_index=255)
-                loss = loss_fct(logits, label)
+                loss = loss_fct(logits, ann)
             elif self.num_classes == 1:
-                valid_mask = ((label >= 0) & (label != 255)).float()
+                valid_mask = ((ann >= 0) & (ann != 255)).float()
                 loss_fct = torch.nn.BCEWithLogitsLoss(reduction="none")
-                loss = loss_fct(logits.squeeze(1), label.float())
+                loss = loss_fct(logits.squeeze(1), ann.float())
                 loss = (loss * valid_mask).mean()
             
             metrics = self.metric._compute(
                 predictions=predicted.cpu(),
-                references=label.cpu(),
+                references=ann.cpu(),
                 num_labels=self.num_classes,
                 ignore_index=255,
                 reduce_labels=False,
