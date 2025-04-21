@@ -1,14 +1,12 @@
 from typing import Any, Protocol, Optional, Dict, List, Tuple, Union
 from torchvision.transforms import functional as F
 from torchvision import transforms as T
-#from engine.category import Category
 import cv2
 import torch
 import numpy as np
 import math
 import random
 from PIL import Image
-
 
 class Transform(Protocol):
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]: ...
@@ -362,10 +360,9 @@ class RandomErase:
                 if "imgs" in data:
                     data["erased imgs"] = data["imgs"].copy()
                 elif "img" in data:
-                    data["erased img"] = data["img"].copy()
+                    data["erased img"] = data["img"].clone()
 
         return data
-        
 
 class ContrastStretch:
     def __init__(
@@ -399,17 +396,24 @@ class ContrastStretch:
     def exp(self, value, power):
         y = np.power(value, power)
         return y
+    
+    def gamma_correction(self, value, gamma):
+        y = np.power(value, 1 / gamma)
+        return y
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         func = getattr(self, self.function_name, None)
         assert callable(func), f'There is no {self.function_name} transform in transform.py!'
-        img = data["img"].copy().astype(np.float32)
-        img /= self.max_intensity
+
+        max_value = self.max_intensity if self.max_intensity != 0.0 else data["img"].astype(np.float32).mean() * 8.0
+        img = data["img"].astype(np.float32) / max_value
         img = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-        img_lst = list() if "imgs" not in data else data["imgs"]
+        np.clip(img[:, :, 2], 0, 1, out=img[:, :, 2])   # ensure there's no exceeded value.
+
         self.parameter = tuple(self.parameter) if type(self.parameter) == list else self.parameter
         img[:, :, 2] = func(img[:, :, 2], self.parameter)
-        img_lst.append((cv2.cvtColor(img, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8))
-        data["imgs"] = img_lst
+
+        # data.setdefault("imgs", list()).append((cv2.cvtColor(img, cv2.COLOR_HSV2RGB) * 255).astype(np.uint8))
+        data.setdefault("imgs", list()).append((cv2.cvtColor(img, cv2.COLOR_HSV2RGB)).astype(np.float32))
 
         return data

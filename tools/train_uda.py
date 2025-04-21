@@ -2,10 +2,11 @@ import sys
 import os
 import gc
 import pandas as pd
-import math
+from PIL import Image
 from datetime import datetime
 
 import numpy as np
+import random
 import torch
 import torch.nn as nn
 from torch.utils.tensorboard import SummaryWriter
@@ -32,6 +33,11 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
 
     categories = Category.load(cfg.category_csv)
     writer = SummaryWriter(tb_dir)
+
+    palette = np.array(
+        [[cat.r, cat.g, cat.b] for cat in categories],
+        dtype=np.uint8
+    )
 
     device_name = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device_name)
@@ -106,7 +112,7 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
         dataset=source_val_dataset,
         batch_size=cfg.val_batch_size,
         shuffle=False,
-        num_workers=cfg.num_workers,
+        num_workers=1,
         drop_last=False,
         pin_memory=cfg.pin_memory
     )
@@ -114,10 +120,19 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
         dataset=target_val_dataset,
         batch_size=cfg.val_batch_size,
         shuffle=False,
-        num_workers=cfg.num_workers,
+        num_workers=1,
         drop_last=False,
         pin_memory=cfg.pin_memory
     )
+
+    print(f'{cfg.dataset} Source Training Dataset Size: {source_train_dataset.__len__()}')
+    print(f'{cfg.dataset} Target Training Dataset Size: {target_train_dataset.__len__()}')
+    print(f'{cfg.dataset} Source Validation Dataset Size: {source_val_dataset.__len__()}')
+    print(f'{cfg.dataset} Source Validation Dataset Size: {target_val_dataset.__len__()}')
+    assert source_train_dataset.__len__() > 0
+    assert target_train_dataset.__len__() > 0
+    assert source_val_dataset.__len__() > 0
+    assert target_val_dataset.__len__() > 0
 
     source_class_weight = torch.zeros((len(categories)))
     target_class_weight = torch.zeros((len(categories)))
@@ -130,6 +145,7 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
     segconfig.num_labels = len(categories)
     
     model = get_model(cfg.model, segconfig)
+    # ema = EMA(model, beta=0.999, update_after_step=-1, update_every=cfg.ema_update_intervals)
     ema = EMA(model, beta=0.999, update_after_step=-1)
 
 
@@ -157,6 +173,7 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
     target_class_weight.to(device)
     model.to(device)
     ema.to(device)
+    ema.ema_model.to(device)
     torch.compile(model)
     torch.compile(ema.ema_model)
     if checkpoint is not None:
@@ -219,6 +236,62 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
                 # pseudo_source_ann = ema(source_imgs).softmax(1)
                 target_ann, _ = ema(target_imgs)
                 target_ann = target_ann.softmax(1)
+
+                mix_source_domain = (random.random() >= (iter/cfg.max_iters))
+
+                if mix_source_domain:
+                    sample_data = next(source_train_dataloader)
+                    sample_imgs = sample_data["imgs"] if "imgs" in sample_data else [sample_data["img"]]
+                    sample_imgs = [im.to(device) for im in sample_imgs]
+
+                    sample_ann, _ = ema(sample_imgs)
+                    sample_ann = sample_ann.softmax(1)
+                    hard_ann = sample_data["ann"]
+                    # if random.random() < (iter / (cfg.max_iters / 2)):
+                    #     sample_ann, _ = ema(sample_imgs)
+                    #     sample_ann = sample_ann.softmax(1)
+                    # else:
+                    #     sample_ann = sample_data["ann"]
+                    #     sample_ann = sample_ann.to(device)
+                    #     sample_ann = torch.nn.functional.one_hot(sample_ann, 25)
+                    #     sample_ann = sample_ann.permute(0, 3, 1, 2).float()
+                    # ann_prob, hard_ann = sample_ann.max(1)
+                    # hard_ann[ann_prob < 0.968] = 0
+                else:
+                    sample_data = next(target_train_dataloader)
+                    sample_imgs = sample_data["imgs"] if "imgs" in sample_data else [sample_data["img"]]
+                    sample_imgs = [im.to(device) for im in sample_imgs]
+                    sample_ann, _ = ema(sample_imgs)
+                    sample_ann = sample_ann.softmax(1)
+                    ann_prob, hard_ann = sample_ann.max(1)
+                    hard_ann[ann_prob < 0.968] = 0
+                
+                for idx in range(0, cfg.train_batch_size):
+                    mix_cat = rcm.get_mix_cat_id(cateList=torch.unique(hard_ann).tolist())
+                    
+                    if mix_cat != 0:
+                        mix_idx = next((i for i in range(0, cfg.train_batch_size) if mix_cat in hard_ann[i]), None)
+                        mix_mask = hard_ann[mix_idx]
+                        mix_mask[mix_mask != mix_cat] = 0
+                        mix_mask4imgs = mix_mask.unsqueeze(0).repeat(3, 1, 1)
+                        mix_mask4soft_ann = mix_mask.unsqueeze(0).repeat(len(categories), 1, 1)    
+                        mix_imgs = [im[mix_idx] for im in sample_imgs] # if mix_source_domain else [im[mix_idx] for im in source_imgs]
+                        mix_ann = sample_ann[mix_idx] # if mix_source_domain else target_ann[mix_idx]
+
+                        for i in range(0, len(target_imgs)):
+                            target_imgs[i][idx][mix_mask4imgs != 0] = mix_imgs[i][mix_mask4imgs != 0]
+                            if cfg.num_masks > 0:
+                                erased_mask = (erased_target_imgs[i][idx] != 0).all(dim=0)
+                                erased_mask = erased_mask.unsqueeze(0).repeat(3, 1, 1)
+                                erased_target_imgs[i][idx][erased_mask] = target_imgs[i][idx][erased_mask]
+                        target_ann[idx][mix_mask4soft_ann != 0] = mix_ann[mix_mask4soft_ann != 0]
+
+                    view_ann = target_ann[idx].argmax(dim=0)
+                    segmap = view_ann.cpu().squeeze(0).numpy()
+                    color_map = palette[segmap]
+                    show_im = Image.fromarray(color_map)
+                    show_im.save(f'{tb_dir}/pseudo_label_{idx}.png')
+
                 # max_pseudo_source_ann = torch.max(pseudo_source_ann, 1)
                 # max_pseudo_target_ann = torch.max(target_ann, 1)
                 # for cat in categories:
@@ -296,6 +369,7 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
                 print(pd.DataFrame({'Category': [cat.name for cat in categories], 'IoU': source_iou_list}))
                 print(f"Validation Target Loss: {target_val_loss}, Target Mean_iou: {target_val_miou}")
                 print(pd.DataFrame({'Category': [cat.name for cat in categories], 'IoU': target_iou_list}))
+            gc.collect()
     writer.close()
 
 if __name__ == "__main__":

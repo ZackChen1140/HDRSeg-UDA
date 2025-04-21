@@ -213,6 +213,53 @@ class DualPathSegformerDecoder(SegformerDecodeHead):
 
         self.config = config
 
+class GradReverse(torch.autograd.Function):
+    def __init__(self):
+        super().__init__()
+
+    @staticmethod
+    def forward(ctx, x, lambda_):
+        ctx.save_for_backward(lambda_)
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (lambda_,) = ctx.saved_variables
+        grad_input = grad_output.clone()
+        return -lambda_ * grad_input, None
+
+def grad_reverse(x, lambd=1.0):
+    lam = torch.tensor(lambd)
+    return GradReverse.apply(x, lam)
+
+class DualPathSegformerDiscriminator(SegformerDecodeHead):
+    def __init__(self, config):
+        super().__init__(config)
+        # linear layers which will unify the channel dimension of each of the encoder blocks to the same config.decoder_hidden_size
+        mlps = []
+        for i in range(config.num_encoder_blocks):
+            mlp = SegformerMLP(config, input_dim=config.hidden_sizes[i] * 2)
+            mlps.append(mlp)
+        self.linear_c = nn.ModuleList(mlps)
+
+        # the following 3 layers implement the ConvModule of the original implementation
+        self.linear_fuse = nn.Conv2d(
+            in_channels=config.decoder_hidden_size * config.num_encoder_blocks,
+            out_channels=config.decoder_hidden_size,
+            kernel_size=1,
+            bias=False,
+        )
+        self.batch_norm = nn.BatchNorm2d(config.decoder_hidden_size)
+        self.activation = nn.ReLU()
+
+        self.dropout = nn.Dropout(config.classifier_dropout_prob)
+        self.classifier = nn.Conv2d(config.decoder_hidden_size, config.num_labels, kernel_size=1)
+
+        self.config = config
+    def forward(self, hidden_states):
+        reversed_hidden_states = [grad_reverse(state) for state in hidden_states]
+        return super().forward(reversed_hidden_states)
+
 class SegformerMLP(nn.Module):
     """
     Linear Embedding.

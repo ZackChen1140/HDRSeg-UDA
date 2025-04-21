@@ -42,6 +42,9 @@ class RareCategoryManager:
         # self.category_probs[ignore] = 0
         self.category_probs /= self.category_probs.sum()
 
+        self.reverse_cate_probs = (1.0 - self.category_probs)
+        self.reverse_cate_probs /= self.reverse_cate_probs.sum()
+
         self.apply_temperature(temperature)
 
         self.length = len(data)
@@ -57,6 +60,15 @@ class RareCategoryManager:
             replace=True,
             p=self.sampling_probs.numpy(),
         )
+    
+    def get_mix_cat_id(self, cateList: List[int]) -> int:
+        temp_probs = np.array([self.reverse_cate_probs[cat] for cat in cateList])
+        temp_probs /= temp_probs.sum()
+        return np.random.choice(
+            cateList,
+            replace=True,
+            p=temp_probs
+        )
 
     def get_stems(self, i: int) -> List[Path]:
         if len(self.consumable_stems[i]) == 0:
@@ -71,8 +83,8 @@ class RLMD(Dataset):
         if rcm == None:
             for file in os.listdir(img_dir):
                 self.img_paths.append(f'{img_dir}/{file}')
-                self.ann_paths.append(f'{ann_dir}/{file[:-4]}.png')
-                if ann_dir != None and os.path.exists(f'{ann_dir}/{file[:-4]}.png') == False:
+                self.ann_paths.append(f'{ann_dir}/{file.split(".")[0]}.png')
+                if ann_dir != None and os.path.exists(f'{ann_dir}/{file.split(".")[0]}.png') == False:
                     self.img_paths.pop()
                     self.ann_paths.pop()
         self.img_dir = img_dir
@@ -98,7 +110,8 @@ class RLMD(Dataset):
             stems = self.rcm.get_stems(random_cat_id)
             stem = random.choice(stems)
             stems.remove(stem)
-            img_path = f'{self.img_dir}/{stem.split("/")[-1][:-4]}.jpg'
+            extension = 'jpg' if self.img_dir.split("/")[-1] == 'images' else 'tiff'
+            img_path = f'{self.img_dir}/{stem.split("/")[-1].split(".")[0]}.{extension}'
             ann_path = stem
 
         return self.transforms.transform(

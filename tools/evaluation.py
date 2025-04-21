@@ -20,10 +20,10 @@ from engine.category import Category
 from engine import transform
 from engine.misc import set_seed
 from engine.validator import Validator
-from configs.config import TrainingConfig
+from configs.config import TrainingConfig_UDA
 
 
-def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
+def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
     # dataset_info = pd.read_csv(cfg.category_csv)
     # categories = dataset_info['name'].to_list()
     categories = Category.load(cfg.category_csv)
@@ -45,13 +45,22 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         transform.Normalize(),
     ]
 
-    val_dataset = get_dataset(dataset_name=cfg.dataset, img_dir=cfg.val_images_root, ann_dir=cfg.val_labels_root, rcm=None, transforms=val_transforms)
+    source_val_dataset = get_dataset(dataset_name=cfg.dataset, img_dir=cfg.source_val_images_root, ann_dir=cfg.source_val_labels_root, rcm=None, transforms=val_transforms)
+    target_val_dataset = get_dataset(dataset_name=cfg.dataset, img_dir=cfg.target_val_images_root, ann_dir=cfg.target_val_labels_root, rcm=None, transforms=val_transforms)
 
-    val_dataloader = DataLoader(
-        dataset=val_dataset,
+    source_val_dataloader = DataLoader(
+        dataset=source_val_dataset,
         batch_size=cfg.val_batch_size,
         shuffle=False,
-        num_workers=cfg.num_workers,
+        num_workers=1,
+        drop_last=False,
+        pin_memory=cfg.pin_memory
+    )
+    target_val_dataloader = DataLoader(
+        dataset=target_val_dataset,
+        batch_size=cfg.val_batch_size,
+        shuffle=False,
+        num_workers=1,
         drop_last=False,
         pin_memory=cfg.pin_memory
     )
@@ -63,7 +72,8 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
     
     model = get_model(cfg.model, segconfig)
 
-    validator = Validator(val_dataloader, model, device, metric, cfg.crop_size, cfg.stride, len(categories), mode='slide')
+    source_validator = Validator(source_val_dataloader, model, device, metric, cfg.crop_size, cfg.stride, len(categories), mode='slide')
+    target_validator = Validator(target_val_dataloader, model, device, metric, cfg.crop_size, cfg.stride, len(categories), mode='slide')
 
     ckpt = torch.load(checkpoint)
     model.load_state_dict(ckpt['model_state_dict'])
@@ -71,15 +81,18 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
 
     model.eval()
     with torch.no_grad():
-        val_loss, val_miou, val_acc, iou_list = validator.validate()
-        print(f"Validation Loss: {val_loss}, Mean_iou: {val_miou}, Mean accuracy: {val_acc}")
-        print(pd.DataFrame({'Category': [cat.name for cat in categories], 'IoU': iou_list}))
+        source_val_loss, source_val_miou, _, source_iou_list = source_validator.validate()
+        target_val_loss, target_val_miou, _, target_iou_list = target_validator.validate()
+        print(f"Validation Source Loss: {source_val_loss}, Source Mean_iou: {source_val_miou}")
+        print(pd.DataFrame({'Category': [cat.name for cat in categories], 'IoU': source_iou_list}))
+        print(f"Validation Target Loss: {target_val_loss}, Target Mean_iou: {target_val_miou}")
+        print(pd.DataFrame({'Category': [cat.name for cat in categories], 'IoU': target_iou_list}))
 
 if __name__ == "__main__":
     import sys
 
     assert len(sys.argv) == 3
-    cfg = TrainingConfig.load(sys.argv[1])
+    cfg = TrainingConfig_UDA.load(sys.argv[1])
     exp_name = sys.argv[1].split('/')[-1][:-5]
     checkpoint = sys.argv[2] if len(sys.argv) == 3 else None
     log_dir = None if checkpoint is None else checkpoint.split('/')[-2]
