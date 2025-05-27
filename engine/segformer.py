@@ -163,6 +163,8 @@ class DualPathSegformerEncoder(nn.Module):
         pixel_values0: torch.FloatTensor, 
         pixel_values1: torch.FloatTensor, 
         output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = True,
+        return_dict: Optional[bool] = True
     ):
         # output_hidden_states = (
         #     output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -171,14 +173,14 @@ class DualPathSegformerEncoder(nn.Module):
         encoder_hidden_states0 = self.encoder0(
             pixel_values0,
             output_attentions=output_attentions,
-            output_hidden_states=True,  # we need the intermediate hidden states
-            return_dict=True,
+            output_hidden_states=output_hidden_states,  # we need the intermediate hidden states
+            return_dict=return_dict,
         ).hidden_states
         encoder_hidden_states1 = self.encoder1(
             pixel_values1,
             output_attentions=output_attentions,
-            output_hidden_states=True,
-            return_dict=True,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
         ).hidden_states
 
         concatenated_hidden_states = list()
@@ -259,7 +261,44 @@ class DualPathSegformerDiscriminator(SegformerDecodeHead):
     def forward(self, hidden_states):
         reversed_hidden_states = [grad_reverse(state) for state in hidden_states]
         return super().forward(reversed_hidden_states)
+    
+class DualPathSegformerDiscriminator(SegformerDecodeHead):
+    def __init__(self, config):
+        super().__init__(config)
+        # linear layers which will unify the channel dimension of each of the encoder blocks to the same config.decoder_hidden_size
+        mlps = []
+        for i in range(config.num_encoder_blocks):
+            mlp = SegformerMLP(config, input_dim=config.hidden_sizes[i] * 2)
+            mlps.append(mlp)
+        self.linear_c = nn.ModuleList(mlps)
 
+        # the following 3 layers implement the ConvModule of the original implementation
+        self.linear_fuse = nn.Conv2d(
+            in_channels=config.decoder_hidden_size * config.num_encoder_blocks,
+            out_channels=config.decoder_hidden_size,
+            kernel_size=1,
+            bias=False,
+        )
+        self.batch_norm = nn.BatchNorm2d(config.decoder_hidden_size)
+        self.activation = nn.ReLU()
+
+        self.dropout = nn.Dropout(config.classifier_dropout_prob)
+        self.classifier = nn.Conv2d(config.decoder_hidden_size, config.num_labels, kernel_size=1)
+
+        self.config = config
+    def forward(self, hidden_states):
+        reversed_hidden_states = [grad_reverse(state) for state in hidden_states]
+        return super().forward(reversed_hidden_states)
+
+class SegformerDiscriminator(SegformerDecodeHead):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def forward(self, hidden_states):
+        reversed_hidden_states = [grad_reverse(state) for state in hidden_states]
+        pred = super().forward(reversed_hidden_states)
+        return pred
+    
 class SegformerMLP(nn.Module):
     """
     Linear Embedding.

@@ -61,14 +61,15 @@ class RareCategoryManager:
             p=self.sampling_probs.numpy(),
         )
     
-    def get_mix_cat_id(self, cateList: List[int]) -> int:
+    def get_mix_cat_id(self, cateList: List[int]) -> list:
         temp_probs = np.array([self.reverse_cate_probs[cat] for cat in cateList])
         temp_probs /= temp_probs.sum()
-        return np.random.choice(
+        return np.unique(np.random.choice(
             cateList,
+            size=min(2, len(cateList)),
             replace=True,
             p=temp_probs
-        )
+        )).tolist()
 
     def get_stems(self, i: int) -> List[Path]:
         if len(self.consumable_stems[i]) == 0:

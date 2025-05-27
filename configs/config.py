@@ -19,6 +19,7 @@ class TrainingConfig(Serializable):
     backbone_lr: float
     head_lr: float
     weight_decay: float
+    pretrain_path: Optional[str]
 
     max_iters: int
     train_interval: int
@@ -36,6 +37,7 @@ class TrainingConfig(Serializable):
     seed: int
     num_workers: int
     pin_memory: bool
+    autocast: bool
 
 @dataclass
 class TrainingConfig_UDA(Serializable):
@@ -57,7 +59,8 @@ class TrainingConfig_UDA(Serializable):
     backbone_lr: float
     head_lr: float
     weight_decay: float
-
+    pretrain_path: Optional[str]
+    
     max_iters: int
     train_interval: int
     val_interval: int
@@ -71,6 +74,7 @@ class TrainingConfig_UDA(Serializable):
     crop_size: Tuple[int, int]
     stride: Optional[Tuple[int, int]]
     random_resize_ratio: Tuple[float, float]
+    mix_source: Optional[int]
     num_masks: int
 
     seed: int

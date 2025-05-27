@@ -2,16 +2,20 @@ import sys
 import os
 import gc
 import pandas as pd
-import math
+from PIL import Image
 from datetime import datetime
 
 import numpy as np
+import random
+
 import torch
 import torch.nn as nn
+import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
-import torch.optim as optim
+
 import evaluate
+from torch_optimizer import Lookahead
 
 from transformers import SegformerConfig
 
@@ -28,10 +32,13 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
     currentTime = datetime.now().strftime("%Y%m%d%H%M%S") if log_dir is None else log_dir[-14:]
     tb_dir = f"logs/{exp_name}_{currentTime}" if log_dir is None else f"logs/{log_dir}"
 
-    # dataset_info = pd.read_csv(cfg.category_csv)
-    # categories = dataset_info['name'].to_list()
     categories = Category.load(cfg.category_csv)
     writer = SummaryWriter(tb_dir)
+
+    palette = np.array(
+        [[cat.r, cat.g, cat.b] for cat in categories],
+        dtype=np.uint8
+    )
 
     device_name = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device_name)
@@ -83,10 +90,15 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         dataset=val_dataset,
         batch_size=cfg.val_batch_size,
         shuffle=False,
-        num_workers=cfg.num_workers,
+        num_workers=1,
         drop_last=False,
         pin_memory=cfg.pin_memory
     )
+
+    print(f'{cfg.dataset} Dataset Size: {train_dataset.__len__()}')
+    print(f'{cfg.dataset} Validation Dataset Size: {val_dataset.__len__()}')
+    assert train_dataset.__len__() > 0
+    assert val_dataset.__len__() > 0
 
     metric = evaluate.load("mean_iou", keep_in_memory=True)
 
@@ -95,89 +107,101 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
     
     model = get_model(cfg.model, segconfig)
 
-    optimizer = optim.AdamW(
+    base_optimizer = optim.AdamW(
         [
             {'name': 'backbone', 'params': model.encoder.parameters(), 'lr': cfg.backbone_lr, 'weight_decay': cfg.weight_decay},
             {'name': 'head', 'params': model.decoder.parameters(), 'lr': cfg.head_lr, 'weight_decay': cfg.weight_decay},
         ]
     )
+    optimizer = Lookahead(optimizer=base_optimizer, k=5, alpha=0.5)
 
     validator = Validator(val_dataloader, model, device, metric, cfg.crop_size, cfg.stride, len(categories), mode='slide')
 
-    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, 1e-4, 1, 1500)
-    poly_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, cfg.max_iters - 1500, 1)
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer.optimizer, 1e-4, 1, 1500)
+    poly_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer.optimizer, cfg.max_iters - 1500, 1)
+    
     scheduler = torch.optim.lr_scheduler.SequentialLR(
-        optimizer,
+        optimizer.optimizer,
         schedulers=[warmup_scheduler, poly_scheduler],
         milestones=[1500]
     )
 
-    scalar = torch.GradScaler(device=device_name)
+    # focal_loss = FocalLoss(gamma=2.0, reduction='mean', ignore_index=255)
+
+    scaler = torch.GradScaler(device=device_name)
 
     model.to(device)
     torch.compile(model)
     if checkpoint is not None:
         ckpt = torch.load(checkpoint)
         model.load_state_dict(ckpt['model_state_dict'])
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        optimizer.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         scheduler.load_state_dict(ckpt["scheduler_state_dict"])
         last_best = ckpt['best_miou']
         last_iteration = ckpt['iteration']
+        optimizer.optimizer.param_groups[0]["lr"] = scheduler._last_lr[0]
+        optimizer.optimizer.param_groups[1]["lr"] = scheduler._last_lr[1]
+    elif cfg.pretrain_path != "":
+        ckpt = torch.load(cfg.pretrain_path)
+        model.load_state_dict(ckpt['model_state_dict'])
 
-    best_miou = 0 if checkpoint is None else last_best
+    best_miou = 0.0 if checkpoint is None else last_best
     begin_iter = 0 if checkpoint is None else last_iteration
-    batch_loss, batch_miou, batch_acc = 0, 0, 0
+    batch_loss, batch_miou = 0.0, 0.0
     for iter in range(begin_iter + 1, cfg.max_iters + 1):
         model.train()
         optimizer.zero_grad()
 
         data = next(train_dataloader)
-        data = data["imgs"] if "imgs" in data else [data["img"]]
+        imgs = data["imgs"] if "imgs" in data else [data["img"]]
         ann = data["ann"]
         imgs, ann = [im.to(device) for im in imgs], ann.to(device)
-
-        with torch.autocast(device_type=device_name):
+        with torch.autocast(device_type=device_name, enabled=cfg.autocast):
             upsampled_logits, loss = model.forward(
                 images=imgs,
                 label=ann
             )
-        predicted = upsampled_logits.argmax(dim=1)
-
-        scalar.scale(loss).backward()
-        scalar.step(optimizer)
-        scalar.update()
-        scheduler.step()
+            # loss = focal_loss.forward(input=upsampled_logits, target=ann)
+        pred = upsampled_logits.argmax(dim=1)
+        scaler.scale(loss).backward()
 
         metrics = metric._compute(
-            predictions=predicted.cpu(),
+            predictions=pred.cpu(),
             references=ann.cpu(),
             num_labels=segconfig.num_labels,
             ignore_index=255,
             reduce_labels=False,
         )
         batch_miou += metrics['mean_iou']
-        batch_acc += metrics['mean_accuracy']
         batch_loss += loss.item()
-
+                
         if iter % cfg.train_interval == 0:
             train_loss = batch_loss / cfg.train_interval
             train_miou = batch_miou / cfg.train_interval
-            train_acc = batch_acc / cfg.train_interval
-            batch_loss, batch_miou, batch_acc = 0, 0, 0
+            batch_loss, batch_miou = 0.0, 0.0
             
             writer.add_scalar('Loss/Train', train_loss, iter)
             writer.add_scalar('mIoU/Train', train_miou, iter)
-            writer.add_scalar('mAcc/Train', train_acc, iter)
-            print(f"[Iter {iter}] Training Loss: {train_loss}, Mean_iou: {train_miou}, Mean accuracy: {train_acc}")
+            writer.add_scalar('Learning Rate', optimizer.optimizer.param_groups[0]['lr'], iter)
+
+            print(
+                f"[Iter {iter}] Training Loss: {train_loss}, "
+                f"Mean_iou: {train_miou}, "
+                f"Learning Rate: {optimizer.optimizer.param_groups[0]['lr']}"
+            )
         
+        scaler.step(optimizer)
+        scaler.update()
+        scheduler.step()
+
         if iter % cfg.val_interval == 0:
             model.eval()
             with torch.no_grad(), torch.autocast(device_type=device_name):
-                val_loss, val_miou, val_acc, iou_list = validator.validate()
+                val_loss, val_miou, _, iou_list = validator.validate()
 
                 checkpoint = {
                     'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
+                    'optimizer_state_dict': optimizer.optimizer.state_dict(),
                     'scheduler_state_dict': scheduler.state_dict(),
                     'best_miou': val_miou,
                     'iteration': iter
@@ -189,12 +213,15 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
                             os.remove(f"logs/{exp_name}_{currentTime}/{file}")
                     torch.save(checkpoint, f"logs/{exp_name}_{currentTime}/best_model_checkpoint_iter{iter}_{currentTime}.pth")
                     best_miou = val_miou
+                
+                if iter % (cfg.max_iters / 4) == 0:
+                    torch.save(checkpoint, f"logs/{exp_name}_{currentTime}/checkpoint_iter_{iter}_{currentTime}.pth")
 
                 writer.add_scalar('Loss/Validation', val_loss, iter)
                 writer.add_scalar('mIoU/Validation', val_miou, iter)
-                writer.add_scalar('mAcc/Validation', val_acc, iter)
-                print(f"Validation Loss: {val_loss}, Mean_iou: {val_miou}, Mean accuracy: {val_acc}")
+                print(f"Validation Loss: {val_loss}, Mean_iou: {val_miou}")
                 print(pd.DataFrame({'Category': [cat.name for cat in categories], 'IoU': iou_list}))
+            gc.collect()
     writer.close()
 
 if __name__ == "__main__":
