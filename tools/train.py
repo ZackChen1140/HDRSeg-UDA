@@ -24,6 +24,7 @@ from engine.dataloader import get_dataset, RareCategoryManager, InfiniteDataload
 from engine.category import Category
 from engine import transform
 from engine.misc import set_seed
+from engine.metric import Metrics
 from engine.validator import Validator
 from configs.config import TrainingConfig
 
@@ -101,6 +102,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
     assert val_dataset.__len__() > 0
 
     metric = evaluate.load("mean_iou", keep_in_memory=True)
+    metric = Metrics(num_categories=len(categories), nan_to_num=0)
 
     segconfig = SegformerConfig().from_pretrained("nvidia/mit-b0")
     segconfig.num_labels = len(categories)
@@ -165,19 +167,21 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         pred = upsampled_logits.argmax(dim=1)
         scaler.scale(loss).backward()
 
-        metrics = metric._compute(
-            predictions=pred.cpu(),
-            references=ann.cpu(),
-            num_labels=segconfig.num_labels,
-            ignore_index=255,
-            reduce_labels=False,
-        )
-        batch_miou += metrics['mean_iou']
+        # metrics = metric._compute(
+        #     predictions=pred.cpu(),
+        #     references=ann.cpu(),
+        #     num_labels=segconfig.num_labels,
+        #     ignore_index=255,
+        #     reduce_labels=False,
+        # )
+        # batch_miou += metrics['mean_iou']
+        metric.compute_and_accum(pred.cpu(), ann.cpu())
         batch_loss += loss.item()
                 
         if iter % cfg.train_interval == 0:
             train_loss = batch_loss / cfg.train_interval
-            train_miou = batch_miou / cfg.train_interval
+            # train_miou = batch_miou / cfg.train_interval
+            train_miou = metric.get_and_reset()["IoU"].mean()
             batch_loss, batch_miou = 0.0, 0.0
             
             writer.add_scalar('Loss/Train', train_loss, iter)

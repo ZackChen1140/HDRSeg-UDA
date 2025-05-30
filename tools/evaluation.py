@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.optim as optim
-import evaluate
+# import evaluate
 
 from transformers import SegformerConfig, SegformerForSemanticSegmentation
 
@@ -19,6 +19,7 @@ from engine.dataloader import get_dataset, RLMD, InfiniteDataloader
 from engine.category import Category
 from engine import transform
 from engine.misc import set_seed
+from engine.metric import Metrics
 from engine.validator import Validator
 from configs.config import TrainingConfig_UDA
 
@@ -65,7 +66,8 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
         pin_memory=cfg.pin_memory
     )
 
-    metric = evaluate.load("mean_iou", keep_in_memory=True)
+    # metric = evaluate.load("mean_iou", keep_in_memory=True)
+    metric = Metrics(num_categories=len(categories), nan_to_num=0)
 
     segconfig = SegformerConfig().from_pretrained("nvidia/mit-b0")
     segconfig.num_labels = len(categories)

@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 from torchvision.ops.focal_loss import sigmoid_focal_loss
 
-import evaluate
+# import evaluate
 from torch_optimizer import Lookahead
 
 from ema_pytorch import EMA
@@ -24,9 +24,10 @@ from transformers import SegformerConfig
 from engine.segformer import get_model
 from engine.dataloader import get_dataset, RareCategoryManager, InfiniteDataloader
 from engine.category import Category
-from engine.ema import PixelThreshold, compute_domain_discrimination_loss, FocalLoss
+from engine.ema import PixelThreshold, FocalLoss, ClassMix, compute_domain_discrimination_loss
 from engine import transform
 from engine.misc import set_seed
+from engine.metric import Metrics
 from engine.validator import Validator
 from configs.config import TrainingConfig_UDA
 
@@ -132,7 +133,7 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
     print(f'{cfg.dataset} Source Training Dataset Size: {source_train_dataset.__len__()}')
     print(f'{cfg.dataset} Target Training Dataset Size: {target_train_dataset.__len__()}')
     print(f'{cfg.dataset} Source Validation Dataset Size: {source_val_dataset.__len__()}')
-    print(f'{cfg.dataset} Source Validation Dataset Size: {target_val_dataset.__len__()}')
+    print(f'{cfg.dataset} Target Validation Dataset Size: {target_val_dataset.__len__()}')
     assert source_train_dataset.__len__() > 0
     assert target_train_dataset.__len__() > 0
     assert source_val_dataset.__len__() > 0
@@ -141,7 +142,8 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
     source_class_weight = torch.zeros((len(categories)))
     target_class_weight = torch.zeros((len(categories)))
 
-    metric = evaluate.load("mean_iou", keep_in_memory=True)
+    # metric = evaluate.load("mean_iou", keep_in_memory=True)
+    metric = Metrics(num_categories=len(categories), nan_to_num=0)
 
     segconfig = SegformerConfig().from_pretrained("nvidia/mit-b0")
     segconfig.num_labels = len(categories)
@@ -173,7 +175,17 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
     )
 
     focal_loss = FocalLoss(gamma=1.5, reduction='mean', ignore_index=255)
-    target_criterion = PixelThreshold(threshold=0.968, focal_loss=FocalLoss(gamma=2.0, ignore_index=255))
+    target_criterion = PixelThreshold(threshold=0.968, focal_loss=FocalLoss(gamma=1.5, ignore_index=255))
+    classmix = ClassMix(
+        device=device,
+        batch_size=cfg.train_batch_size,
+        rcm=rcm,
+        categories=categories,
+        source_dataloader=source_train_dataloader,
+        target_dataloader=target_train_dataloader,
+        ema=ema,
+        mix_num=cfg.mix_num
+    )
 
     scaler = torch.GradScaler(device=device_name)
 
@@ -226,19 +238,22 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
         source_pred = upsampled_logits.argmax(dim=1)
         scaler.scale(source_loss).backward()
 
-        metrics = metric._compute(
-            predictions=source_pred.cpu(),
-            references=source_ann.cpu(),
-            num_labels=segconfig.num_labels,
-            ignore_index=255,
-            reduce_labels=False,
-        )
-        source_batch_miou += metrics['mean_iou']
+        # metrics = metric._compute(
+        #     predictions=source_pred.cpu(),
+        #     references=source_ann.cpu(),
+        #     num_labels=segconfig.num_labels,
+        #     ignore_index=255,
+        #     reduce_labels=False,
+        # )
+        # source_batch_miou += metrics['mean_iou']
+        metric.compute_and_accum(source_pred.cpu(), source_ann.cpu())
         source_batch_loss += source_loss.item()
 
         if iter % ema.update_every == 0:
             target_data = next(target_train_dataloader)
             target_imgs = target_data["imgs"] if "imgs" in target_data else [target_data["img"]]
+
+            erased_target_imgs = None
             if cfg.num_masks > 0:
                 erased_target_imgs = target_data["erased imgs"] if "erased imgs" in target_data else [target_data["erased img"]]
 
@@ -252,50 +267,19 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
                 source_dis_label = torch.zeros(target_ann.shape)
                 target_dis_label = torch.zeros(target_ann.shape)
                 source_dis_label[:] = 0
-                target_dis_label[:] = 1
-
-                if cfg.mix_source == 0:
-                    mix_source_domain = False
-                elif cfg.mix_source == 1:
-                    mix_source_domain = (random.random() > (iter/cfg.max_iters))
-                else:
-                    mix_source_domain = (random.random() > 0.5)
-
-                sample_data = next(source_train_dataloader if mix_source_domain else target_train_dataloader)
-                sample_imgs = sample_data["imgs"] if "imgs" in sample_data else [sample_data["img"]]
-                sample_imgs = [im.to(device) for im in sample_imgs]
-                sample_ann, _ = ema(sample_imgs)
-                sample_ann = sample_ann.softmax(1)
-                sample_imgs, sample_ann = [im.to(torch.device('cpu')) for im in sample_imgs], sample_ann.to(torch.device('cpu'))
-
-                if mix_source_domain:
-                    hard_ann = sample_data["ann"]
-                else:
-                    ann_prob, hard_ann = sample_ann.max(1)
-                    hard_ann[ann_prob < 0.968] = 0
-                
                 for idx in range(0, cfg.train_batch_size):
-                    mix_cat_list = rcm.get_mix_cat_id(cateList=torch.unique(hard_ann).tolist())
-                    
-                    for mix_cat in mix_cat_list:
-                        if mix_cat != 0:
-                            mix_idx = next((i for i in range(0, cfg.train_batch_size) if mix_cat in hard_ann[i]), None)
-                            mix_mask = hard_ann[mix_idx].clone()
-                            mix_mask[mix_mask != mix_cat] = 0
-                            mix_mask4imgs = mix_mask.unsqueeze(0).repeat(3, 1, 1)
-                            mix_mask4soft_ann = mix_mask.unsqueeze(0).repeat(len(categories), 1, 1)    
-                            mix_imgs = [im[mix_idx] for im in sample_imgs] # if mix_source_domain else [im[mix_idx] for im in source_imgs]
-                            mix_ann = sample_ann[mix_idx] # if mix_source_domain else target_ann[mix_idx]
+                    target_dis_label[idx, :] = target_data["domain"][idx]
 
-                            for i in range(0, len(target_imgs)):
-                                target_imgs[i][idx][mix_mask4imgs != 0] = mix_imgs[i][mix_mask4imgs != 0]
-                                if cfg.num_masks > 0:
-                                    erased_mask = (erased_target_imgs[i][idx] != 0).all(dim=0)
-                                    erased_mask = erased_mask.unsqueeze(0).repeat(3, 1, 1)
-                                    erased_target_imgs[i][idx][erased_mask] = target_imgs[i][idx][erased_mask]
-                            target_ann[idx][mix_mask4soft_ann != 0] = mix_ann[mix_mask4soft_ann != 0]
-                            target_dis_label[idx][mix_mask4soft_ann != 0] = 0 if mix_source_domain else 1
+                mix_domain = 0 if (random.random() > 0.5) else 1
+                classmix.mix(
+                    mix_domain=mix_domain,
+                    imgs=target_imgs,
+                    ann= target_ann,
+                    dis_label=target_dis_label,
+                    erased_imgs=erased_target_imgs
+                )
 
+                for idx in range(0, cfg.train_batch_size):
                     view_ann = target_ann[idx].argmax(dim=0)
                     segmap = view_ann.cpu().squeeze(0).numpy()
                     color_map = palette[segmap]
@@ -359,7 +343,8 @@ def main(cfg: TrainingConfig_UDA, exp_name: str, checkpoint: str, log_dir: str):
                 
         if iter % cfg.train_interval == 0:
             source_train_loss = source_batch_loss / cfg.train_interval
-            source_train_miou = source_batch_miou / cfg.train_interval
+            # source_train_miou = source_batch_miou / cfg.train_interval
+            source_train_miou = metric.get_and_reset()["IoU"].mean()
             target_train_loss = target_batch_loss / target_batch_num
             source_train_dis_loss = source_dis_batch_loss / target_batch_num
             target_train_dis_loss = target_dis_batch_loss / target_batch_num

@@ -5,7 +5,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from evaluate import EvaluationModule
+# from evaluate import EvaluationModule
+from engine.metric import Metrics
 
 class Validator:
     def __init__(
@@ -13,7 +14,8 @@ class Validator:
         dataloader: DataLoader,
         model: torch.nn.Module,
         device: torch.device,
-        metric: EvaluationModule,
+        # metric: EvaluationModule,
+        metric: Metrics,
         crop_size: Tuple[int, int],
         stride: Tuple[int, int],
         num_classes: int,        
@@ -50,30 +52,37 @@ class Validator:
                 loss = loss_fct(logits.squeeze(1), ann.float())
                 loss = (loss * valid_mask).mean()
             
-            metrics = self.metric._compute(
-                predictions=predicted.cpu(),
-                references=ann.cpu(),
-                num_labels=self.num_classes,
-                ignore_index=255,
-                reduce_labels=False,
-            )
+            # metrics = self.metric._compute(
+            #     predictions=predicted.cpu(),
+            #     references=ann.cpu(),
+            #     num_labels=self.num_classes,
+            #     ignore_index=255,
+            #     nan_to_num=0,
+            #     reduce_labels=False,
+            # )
+            self.metric.compute_and_accum(predicted, ann)
 
             avg_loss += loss.item()
-            avg_miou += metrics['mean_iou']
-            avg_acc += metrics['mean_accuracy']
-            if iou_list == None:
-                iou_list = metrics['per_category_iou'].tolist()
-                batch_list = [0.0 if math.isnan(v) else 1.0 for v in iou_list]
-            else:
-                for idx, iou in enumerate(metrics['per_category_iou'].tolist()):
-                    if not math.isnan(iou):
-                        iou_list[idx] = iou if math.isnan(iou_list[idx]) else iou_list[idx] + iou
-                        batch_list[idx] += 1
+            # avg_miou += metrics['mean_iou']
+            # avg_acc += metrics['mean_accuracy']
+            # if iou_list == None:
+            #     iou_list = metrics['per_category_iou'].tolist()
+            #     batch_list = [0.0 if math.isnan(v) else 1.0 for v in iou_list]
+            # else:
+            #     for idx, iou in enumerate(metrics['per_category_iou'].tolist()):
+            #         if not math.isnan(iou):
+            #             iou_list[idx] = iou if math.isnan(iou_list[idx]) else iou_list[idx] + iou
+            #             batch_list[idx] += 1
 
+        iou = self.metric.get_and_reset()["IoU"]
+        
         avg_loss = avg_loss / len(self.dataloader)
-        avg_miou = avg_miou / len(self.dataloader)
-        avg_acc = avg_acc / len(self.dataloader)
-        iou_list = [v / b for v, b in zip(iou_list, batch_list)]
+        avg_miou = iou.mean()
+        avg_acc = 0.0
+        iou_list = iou
+        # avg_miou = avg_miou / len(self.dataloader)
+        # avg_acc = avg_acc / len(self.dataloader)
+        # iou_list = [v / b for v, b in zip(iou_list, batch_list)]
 
         return avg_loss, avg_miou, avg_acc, iou_list
 

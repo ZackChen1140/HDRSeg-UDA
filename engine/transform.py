@@ -340,6 +340,12 @@ class RandomErase:
         return x, y, h, w, v
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        if data["domain"] == 1:
+            if "imgs" in data:
+                data["erased imgs"] = data["imgs"]
+            elif "img" in data:
+                data["erased img"] = data["img"]
+        
         img_p = data["imgs"][0] if "imgs" in data else data["img"]
         x, y, h, w, v = self.get_params(img_p)
         p = torch.rand(1)

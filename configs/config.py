@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Union
 from simple_parsing import Serializable
 from dataclasses import dataclass
 
@@ -47,11 +47,11 @@ class TrainingConfig_UDA(Serializable):
     rcs_path: Optional[str]
     source_train_images_root: str
     source_train_labels_root: str
-    target_train_images_root: str
+    target_train_images_root: Union[List[str], str]
     source_val_images_root: str
     source_val_labels_root: str
-    target_val_images_root: str
-    target_val_labels_root: str
+    target_val_images_root: Union[List[str], str]
+    target_val_labels_root: Union[List[str], str]
 
     model: str
     train_batch_size: int
@@ -74,7 +74,7 @@ class TrainingConfig_UDA(Serializable):
     crop_size: Tuple[int, int]
     stride: Optional[Tuple[int, int]]
     random_resize_ratio: Tuple[float, float]
-    mix_source: Optional[int]
+    mix_num: Optional[int]
     num_masks: int
 
     seed: int

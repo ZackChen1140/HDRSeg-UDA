@@ -1,7 +1,13 @@
-from typing import List, Dict, Tuple
+import random
+from typing import List, Dict, Tuple, Union, Any
 import torch
 from torch.nn import functional as F
+from torch.utils.data import DataLoader
+from ema_pytorch import EMA
 from transformers.modeling_outputs import BaseModelOutput
+
+from engine.dataloader import RareCategoryManager
+from engine.category import Category
 
 class FocalLoss(torch.nn.Module):
     def __init__(self, gamma=0, alpha=None, reduction=None, ignore_index=None):
@@ -82,17 +88,84 @@ class PixelThreshold:
             return loss[ge].mean()
         return torch.zeros(1, requires_grad=True).cuda()
     
-def compute_domain_discrimination_loss(
-        model: torch.nn.Module,
-        discriminator: torch.nn.Module,
+class ClassMix:
+    def __init__(
+        self,
+        device: torch.device,
+        batch_size: int,
+        rcm: RareCategoryManager,
+        categories: List[Category],
+        source_dataloader: DataLoader = None,
+        target_dataloader: DataLoader = None,
+        ema: EMA = None,
+        mix_num: int = 1
+    ) -> None:
+        self.device = device
+        self.batch_size = batch_size
+        self.rcm = rcm
+        self.categories = categories
+        self.source_dataloader = source_dataloader
+        self.target_dataloader = target_dataloader
+        self.ema = ema
+        self.mix_num = mix_num
+
+    def mix(
+        self,
+        mix_domain: int,
         imgs: List[torch.Tensor],
         ann: torch.Tensor,
-        dis_label: torch.Tensor,
-        # domain_label: int, 
-        domain_class_weight: torch.Tensor,
-        crop_size: Tuple[int, int], 
-        device: torch.device
-    ) -> torch.Tensor:
+        dis_label: torch.Tensor = None,
+        erased_imgs: List[torch.Tensor] = None,
+    ):
+        sample_data = next(self.source_dataloader if mix_domain == 0 else self.target_dataloader)
+        sample_imgs = sample_data["imgs"] if "imgs" in sample_data else [sample_data["img"]]
+        sample_imgs = [im.to(self.device) for im in sample_imgs]
+        sample_ann, _ = self.ema(sample_imgs)
+        sample_ann = sample_ann.softmax(1)
+        sample_imgs, sample_ann = [im.to(torch.device('cpu')) for im in sample_imgs], sample_ann.to(torch.device('cpu'))
+
+        if mix_domain == 0:
+            hard_ann = sample_data["ann"]
+        else:
+            ann_prob, hard_ann = sample_ann.max(1)
+            hard_ann[ann_prob < 0.968] = 0
+
+        for idx in range(0, self.batch_size):
+            mix_cat_list = self.rcm.get_mix_cat_id(cateList=torch.unique(hard_ann).tolist(), mix_num=self.mix_num)
+            
+            for mix_cat in mix_cat_list:
+                if mix_cat != 0:
+                    mix_idx = next((i for i in range(0, self.batch_size) if mix_cat in hard_ann[i]), None)
+                    mix_domain = sample_data["domain"][mix_idx] # to distinguish between rainy and night
+                    mix_mask = hard_ann[mix_idx].clone()
+                    mix_mask[mix_mask != mix_cat] = 0
+                    mix_mask4imgs = mix_mask.unsqueeze(0).repeat(3, 1, 1)
+                    mix_mask4soft_ann = mix_mask.unsqueeze(0).repeat(len(self.categories), 1, 1)    
+                    mix_imgs = [im[mix_idx] for im in sample_imgs] # if mix_source_domain else [im[mix_idx] for im in source_imgs]
+                    mix_ann = sample_ann[mix_idx] # if mix_source_domain else target_ann[mix_idx]
+
+                    for i in range(0, len(imgs)):
+                        imgs[i][idx][mix_mask4imgs != 0] = mix_imgs[i][mix_mask4imgs != 0]
+                    ann[idx][mix_mask4soft_ann != 0] = mix_ann[mix_mask4soft_ann != 0]
+                    if dis_label is not None:
+                        dis_label[idx][mix_mask4soft_ann != 0] = mix_domain
+            if erased_imgs is not None:
+                for i in range(0, len(imgs)):
+                    erased_mask = (erased_imgs[i][idx] != 0).all(dim=0)
+                    erased_mask = erased_mask.unsqueeze(0).repeat(3, 1, 1)
+                    erased_imgs[i][idx][erased_mask] = imgs[i][idx][erased_mask]
+    
+def compute_domain_discrimination_loss(
+    model: torch.nn.Module,
+    discriminator: torch.nn.Module,
+    imgs: List[torch.Tensor],
+    ann: torch.Tensor,
+    dis_label: torch.Tensor,
+    # domain_label: int, 
+    domain_class_weight: torch.Tensor,
+    crop_size: Tuple[int, int], 
+    device: torch.device
+) -> torch.Tensor:
     # imgs = [im.to(device) for im in imgs]
     # ann = ann.to(device)
     # dis_label = dis_label.to(device)

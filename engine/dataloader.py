@@ -5,7 +5,7 @@ import warnings
 import json
 import random
 from PIL import Image
-from typing import List, Optional
+from typing import List, Optional, Union
 from dataclasses import dataclass
 from copy import deepcopy
 from pathlib import Path
@@ -61,12 +61,12 @@ class RareCategoryManager:
             p=self.sampling_probs.numpy(),
         )
     
-    def get_mix_cat_id(self, cateList: List[int]) -> list:
+    def get_mix_cat_id(self, cateList: List[int], mix_num: int = 1) -> list:
         temp_probs = np.array([self.reverse_cate_probs[cat] for cat in cateList])
         temp_probs /= temp_probs.sum()
         return np.unique(np.random.choice(
             cateList,
-            size=min(2, len(cateList)),
+            size=min(mix_num, len(cateList)),
             replace=True,
             p=temp_probs
         )).tolist()
@@ -78,16 +78,32 @@ class RareCategoryManager:
         return self.consumable_stems[i]
 
 class RLMD(Dataset):
-    def __init__(self, img_dir: str, ann_dir: str, rcm: Optional[RareCategoryManager], transforms: List[Transform]):
+    def __init__(
+        self,
+        img_dir: Union[str, List[str]],
+        ann_dir: Union[str, List[str]],
+        rcm: Optional[RareCategoryManager],
+        transforms: List[Transform]
+    ):
+        if isinstance(img_dir, str):
+            img_dir = [img_dir]
+        if ann_dir is None:
+            ann_dir = [None for _ in range(0, len(img_dir))]
+        elif isinstance(ann_dir, str):
+            ann_dir = [ann_dir]
+        assert ann_dir is None or len(img_dir) == len(ann_dir), f"Inconsistent number of dataset paths."
+        
         self.img_paths = list()
         self.ann_paths = list()
+
         if rcm == None:
-            for file in os.listdir(img_dir):
-                self.img_paths.append(f'{img_dir}/{file}')
-                self.ann_paths.append(f'{ann_dir}/{file.split(".")[0]}.png')
-                if ann_dir != None and os.path.exists(f'{ann_dir}/{file.split(".")[0]}.png') == False:
-                    self.img_paths.pop()
-                    self.ann_paths.pop()
+            for idx in range(0, len(img_dir)):
+                for file in os.listdir(img_dir[idx]):
+                    self.img_paths.append(f'{img_dir[idx]}/{file}')
+                    self.ann_paths.append(f'{ann_dir[idx]}/{file.split(".")[0]}.png')
+                    if ann_dir[idx] != None and os.path.exists(f'{ann_dir[idx]}/{file.split(".")[0]}.png') == False:
+                        self.img_paths.pop()
+                        self.ann_paths.pop()
         self.img_dir = img_dir
         self.ann_dir = ann_dir
         self.rcm = rcm
@@ -111,14 +127,18 @@ class RLMD(Dataset):
             stems = self.rcm.get_stems(random_cat_id)
             stem = random.choice(stems)
             stems.remove(stem)
-            extension = 'jpg' if self.img_dir.split("/")[-1] == 'images' else 'tiff'
-            img_path = f'{self.img_dir}/{stem.split("/")[-1].split(".")[0]}.{extension}'
+            extension = 'jpg' if self.img_dir[0].split("/")[-1] == 'images' else 'tiff'
+            # img_path = f'{self.img_dir}/{stem.split("/")[-1].split(".")[0]}.{extension}'
+            img_path = f'{self.img_dir[0]}/{stem.split("/")[-1].split(".")[0]}.{extension}'
             ann_path = stem
+
+        domain = 1 if 'rainy' in img_path else 0
 
         return self.transforms.transform(
             {
                 "img_path": img_path,
-                "ann_path": ann_path
+                "ann_path": ann_path,
+                "domain": domain
             }
         )
     
