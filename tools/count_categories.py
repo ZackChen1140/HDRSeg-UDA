@@ -1,7 +1,10 @@
+from typing import List, Dict, Any
 import os
 import argparse
 import json
 import torch
+import numpy as np
+import pandas as pd
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from engine.count_dataloader import RLMDImgAnnDataset
@@ -23,6 +26,14 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+def count_cate_prob(categories: Category, data: List[Dict[str, Any]])-> List[float]:
+    category_probs = torch.zeros(len(categories))
+    for d in data:
+        count = np.array(d["count"])
+        category_probs += count
+    category_probs /= category_probs.sum()
+
+    return category_probs.tolist()
 
 def count_dataset_categories(dataloader, categories, rcs):
     counts = torch.zeros(len(categories)).int()
@@ -56,18 +67,21 @@ def main(cate_filepath, img_dirpath, ann_dirpath, rcs_savepath):
         drop_last=False
     )
 
-    if rcs_savepath:
-        rcs = []
-        counts = count_dataset_categories(dataloader, categories, rcs)
+    rcs = []
+    counts = count_dataset_categories(dataloader, categories, rcs)
+    if rcs_savepath is not None:
         with open(rcs_savepath, "w") as f:
             json.dump(rcs, f)
+    else:
+        prop = count_cate_prob(categories, rcs)
+        print(pd.DataFrame({'Category': [cat.name for cat in categories], 'Proportion': prop}))
 
 
 if __name__ == "__main__":
     import sys
-    assert len(sys.argv) == 5
+    assert len(sys.argv) == 4 or len(sys.argv) == 5
     cate_filepath = sys.argv[1]
     img_dirpath = sys.argv[2]
     ann_dirpath = sys.argv[3]
-    rcs_savepath = sys.argv[4]
+    rcs_savepath = sys.argv[4] if len(sys.argv) == 5 else None
     main(cate_filepath, img_dirpath, ann_dirpath, rcs_savepath)

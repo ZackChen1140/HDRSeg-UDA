@@ -20,11 +20,6 @@ class FocalLoss(torch.nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, input, target):
-        # if input.dim()>2:
-        #     input = input.view(input.size(0),input.size(1),-1)  # N,C,H,W => N,C,H*W
-        #     input = input.transpose(1,2)    # N,C,H*W => N,H*W,C
-        #     input = input.contiguous().view(-1,input.size(2))   # N,H*W,C => N*H*W,C
-        # target = target.view(-1,1)
         if input.dim() > 2:
             N, C, H, W = input.shape
             input = input.permute(0, 2, 3, 1).reshape(-1, C)  # [N*H*W, C]
@@ -70,7 +65,6 @@ class PixelThreshold:
         soft_ann: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
         prob, ann = soft_ann.max(1)
-        # loss = criterion(pred, ann)
 
         if self.focal_loss is not None:
             loss = self.focal_loss.forward(input=logits, target=ann)
@@ -166,11 +160,6 @@ def compute_domain_discrimination_loss(
     crop_size: Tuple[int, int], 
     device: torch.device
 ) -> torch.Tensor:
-    # imgs = [im.to(device) for im in imgs]
-    # ann = ann.to(device)
-    # dis_label = dis_label.to(device)
-    # domain_class_weight = domain_class_weight.to(device)
-
     latent = model.encoder.forward(
         *imgs,
         output_attentions=model.config.output_attentions,
@@ -181,8 +170,6 @@ def compute_domain_discrimination_loss(
         latent = latent.hidden_states
     dis_pred = discriminator(latent)
     dis_pred = F.interpolate(dis_pred, crop_size, mode="bilinear")
-    # dis_label = torch.zeros(dis_pred.shape).cuda()
-    # dis_label[:] = domain_label
 
     dis_loss = F.binary_cross_entropy_with_logits(
         dis_pred,

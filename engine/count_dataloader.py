@@ -23,9 +23,10 @@ class RLMDImgAnnDataset(Dataset):
         self.img_paths = list()
         self.ann_paths = list()
         for file in os.listdir(img_dir):
-            if os.path.exists(f'{img_dir}/{file}') == True and os.path.exists(f'{ann_dir}/{file[:-4]}.png') == True:
+            filename = file[:-5] if file.endswith('.tiff') else file[:-4]
+            if os.path.exists(f'{img_dir}/{file}') == True and os.path.exists(f'{ann_dir}/{filename}.png') == True:
                 self.img_paths.append(f'{img_dir}/{file}')
-                self.ann_paths.append(f'{ann_dir}/{file[:-4]}.png')
+                self.ann_paths.append(f'{ann_dir}/{filename}.png')
         self.transforms = Composition(transforms)
 
     def __len__(self) -> int:

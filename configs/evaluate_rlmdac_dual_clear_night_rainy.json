@@ -1,0 +1,28 @@
+{
+    "dataset": "RLMD",
+    "category_csv": "data/csv/rlmd.csv",
+    "image_roots": [
+        "/home/rvl/datasets/rlmd_ac/clear/val/images_hdr",
+        "/home/rvl/datasets/rlmd_ac/night/val/images_hdr",
+        "/home/rvl/datasets/rlmd_ac/rainy/val/images_hdr"
+    ],
+    "label_roots": [
+        "/home/rvl/datasets/rlmd_ac/clear/val/labels",
+        "/home/rvl/datasets/rlmd_ac/night/val/labels",
+        "/home/rvl/datasets/rlmd_ac/rainy/val/labels"
+    ],
+    "ignore_index": [
+        [],
+        [],
+        []
+    ],
+    "model": "DualPathSegformer", 
+    "batch_size": 1,
+    "max_intensity": 0.0,
+    "contrast_stretch": ["log", "exp"],
+    "img_proc_params": [15.0, 3.0],
+    "image_scale": [1080, 1920],
+    "crop_size": [512, 512],
+    "stride": [384, 384],
+    "pin_memory": true
+}

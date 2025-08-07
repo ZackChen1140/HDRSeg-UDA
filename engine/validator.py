@@ -14,12 +14,12 @@ class Validator:
         dataloader: DataLoader,
         model: torch.nn.Module,
         device: torch.device,
-        # metric: EvaluationModule,
         metric: Metrics,
         crop_size: Tuple[int, int],
         stride: Tuple[int, int],
-        num_classes: int,        
-        mode: str
+        num_classes: int,
+        mode: str,
+        ignore_index: List[int] = list()
     ):
         self.dataloader = dataloader
         self.model = model
@@ -29,6 +29,7 @@ class Validator:
         self.stride = stride
         self.num_classes = num_classes
         self.mode = mode
+        self.ignore_index = ignore_index
         assert mode == 'slide' or mode == 'basic', 'mode must be \'slide\' or \'basic\'.'
 
     def validate(self):
@@ -36,7 +37,6 @@ class Validator:
         avg_miou = 0
         avg_acc = 0
         iou_list = None
-        batch_list = None
         for data in self.dataloader:
             imgs = data["imgs"] if "imgs" in data else [data["img"]]
             ann = data["ann"]
@@ -52,40 +52,53 @@ class Validator:
                 loss = loss_fct(logits.squeeze(1), ann.float())
                 loss = (loss * valid_mask).mean()
             
-            # metrics = self.metric._compute(
-            #     predictions=predicted.cpu(),
-            #     references=ann.cpu(),
-            #     num_labels=self.num_classes,
-            #     ignore_index=255,
-            #     nan_to_num=0,
-            #     reduce_labels=False,
-            # )
             self.metric.compute_and_accum(predicted, ann)
 
             avg_loss += loss.item()
-            # avg_miou += metrics['mean_iou']
-            # avg_acc += metrics['mean_accuracy']
-            # if iou_list == None:
-            #     iou_list = metrics['per_category_iou'].tolist()
-            #     batch_list = [0.0 if math.isnan(v) else 1.0 for v in iou_list]
-            # else:
-            #     for idx, iou in enumerate(metrics['per_category_iou'].tolist()):
-            #         if not math.isnan(iou):
-            #             iou_list[idx] = iou if math.isnan(iou_list[idx]) else iou_list[idx] + iou
-            #             batch_list[idx] += 1
 
         iou = self.metric.get_and_reset()["IoU"]
         
         avg_loss = avg_loss / len(self.dataloader)
-        avg_miou = iou.mean()
+        avg_miou = torch.Tensor([x for idx, x in enumerate(iou) if idx not in self.ignore_index]).mean()
         avg_acc = 0.0
         iou_list = iou
-        # avg_miou = avg_miou / len(self.dataloader)
-        # avg_acc = avg_acc / len(self.dataloader)
-        # iou_list = [v / b for v, b in zip(iou_list, batch_list)]
+        for idx in range(len(iou_list)):
+            if idx in self.ignore_index:
+                iou_list[idx] = float('nan')
 
         return avg_loss, avg_miou, avg_acc, iou_list
 
+    def frame_wise_validate(self):
+        name_list = list()
+        miou_list = list()
+        for data in self.dataloader:
+            imgs = data["imgs"] if "imgs" in data else [data["img"]]
+            ann = data["ann"]
+            imgs, ann = [im.to(self.device) for im in imgs], ann.to(self.device)
+            logits = self.slide_inference(images=imgs)
+            predicted = logits.argmax(dim=1)
+            if self.num_classes > 1:
+                loss_fct = torch.nn.CrossEntropyLoss(ignore_index=255)
+                loss = loss_fct(logits, ann)
+            elif self.num_classes == 1:
+                valid_mask = ((ann >= 0) & (ann != 255)).float()
+                loss_fct = torch.nn.BCEWithLogitsLoss(reduction="none")
+                loss = loss_fct(logits.squeeze(1), ann.float())
+                loss = (loss * valid_mask).mean()
+            
+            self.metric.compute_and_accum(predicted, ann)
+            iou = self.metric.get_and_reset()["IoU"]
+            miou = 0.0
+            cats = torch.unique(ann).tolist()
+            for idx in range(len(iou)):
+                if idx in cats:
+                    miou += iou[idx]
+            miou /= len(cats)
+            name_list.append(data["img_path"][0].split('/')[-1].split('.')[0])
+            miou_list.append(miou)
+
+        return name_list, miou_list
+    
     def slide_inference(
         self,
         images: List[torch.Tensor],
@@ -118,5 +131,3 @@ class Validator:
 
         preds = preds / count_mat
         return preds
-    
-    # def inference(self):

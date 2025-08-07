@@ -12,6 +12,7 @@ class TrainingConfig(Serializable):
     train_labels_root: str
     val_images_root: str
     val_labels_root: str
+    ignore_index: List[int]
 
     model: str
     train_batch_size: int
@@ -47,11 +48,12 @@ class TrainingConfig_UDA(Serializable):
     rcs_path: Optional[str]
     source_train_images_root: str
     source_train_labels_root: str
-    target_train_images_root: Union[List[str], str]
+    target_train_images_root: List[str]
     source_val_images_root: str
     source_val_labels_root: str
-    target_val_images_root: Union[List[str], str]
-    target_val_labels_root: Union[List[str], str]
+    target_val_images_root: List[str]
+    target_val_labels_root: List[str]
+    ignore_index: List[List[int]]
 
     model: str
     train_batch_size: int
@@ -81,3 +83,22 @@ class TrainingConfig_UDA(Serializable):
     num_workers: int
     pin_memory: bool
     autocast: bool
+
+@dataclass
+class EvaluationConfig(Serializable):
+    dataset: str
+    category_csv: str
+
+    image_roots: List[str]
+    label_roots: List[str]
+    ignore_index: List[List[int]]
+    model: str
+    batch_size: int
+
+    max_intensity: Optional[float]
+    contrast_stretch: Optional[List[str]]
+    img_proc_params: Optional[list]
+    image_scale: Tuple[int, int]
+    crop_size: Tuple[int, int]
+    stride: Optional[Tuple[int, int]]
+    pin_memory: bool

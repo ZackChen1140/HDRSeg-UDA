@@ -423,3 +423,9 @@ class ContrastStretch:
         data.setdefault("imgs", list()).append((cv2.cvtColor(img, cv2.COLOR_HSV2RGB)).astype(np.float32))
 
         return data
+    
+class Check:
+    def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        if "imgs" in data and "img" in data:
+            data.pop("img")
+        return data

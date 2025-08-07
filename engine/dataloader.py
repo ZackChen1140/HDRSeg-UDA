@@ -30,16 +30,13 @@ class RareCategoryManager:
 
         self.stems = {cat.id: [] for cat in categories}
         self.category_probs = torch.zeros(len(categories))
-        # ignore = [True if cat.id in rcs_cfg.ignore_ids else False for cat in categories]
         for d in data:
-            # filename = Path(d["filename"]).stem
             count = np.array(d["count"])
             for cat in categories:
                 if count[cat.id]:
                     self.stems[cat.id].append(d["filename"])
             self.category_probs += count
         self.consumable_stems = deepcopy(self.stems)
-        # self.category_probs[ignore] = 0
         self.category_probs /= self.category_probs.sum()
 
         self.reverse_cate_probs = (1.0 - self.category_probs)
@@ -73,15 +70,14 @@ class RareCategoryManager:
 
     def get_stems(self, i: int) -> List[Path]:
         if len(self.consumable_stems[i]) == 0:
-            # print(f"Already trained all images in category {i}!")
             self.consumable_stems[i] = deepcopy(self.stems[i])
         return self.consumable_stems[i]
 
 class RLMD(Dataset):
     def __init__(
         self,
-        img_dir: Union[str, List[str]],
-        ann_dir: Union[str, List[str]],
+        img_dir: Union[List[str], str],
+        ann_dir: Union[List[str], str],
         rcm: Optional[RareCategoryManager],
         transforms: List[Transform]
     ):
@@ -128,7 +124,6 @@ class RLMD(Dataset):
             stem = random.choice(stems)
             stems.remove(stem)
             extension = 'jpg' if self.img_dir[0].split("/")[-1] == 'images' else 'tiff'
-            # img_path = f'{self.img_dir}/{stem.split("/")[-1].split(".")[0]}.{extension}'
             img_path = f'{self.img_dir[0]}/{stem.split("/")[-1].split(".")[0]}.{extension}'
             ann_path = stem
 
@@ -142,6 +137,134 @@ class RLMD(Dataset):
             }
         )
     
+class CeyMo(Dataset):
+    def __init__(
+        self,
+        img_dir: Union[List[str], str],
+        ann_dir: Union[List[str], str],
+        rcm: Optional[RareCategoryManager],
+        transforms: List[Transform]
+    ):
+        if isinstance(img_dir, str):
+            img_dir = [img_dir]
+        if ann_dir is None:
+            ann_dir = [None for _ in range(0, len(img_dir))]
+        elif isinstance(ann_dir, str):
+            ann_dir = [ann_dir]
+        assert ann_dir is None or len(img_dir) == len(ann_dir), f"Inconsistent number of dataset paths."
+        
+        self.img_paths = list()
+        self.ann_paths = list()
+
+        if rcm == None:
+            for idx in range(0, len(img_dir)):
+                for file in os.listdir(img_dir[idx]):
+                    self.img_paths.append(f'{img_dir[idx]}/{file}')
+                    self.ann_paths.append(f'{ann_dir[idx]}/{file.split(".")[0]}.png')
+                    if ann_dir[idx] != None and os.path.exists(f'{ann_dir[idx]}/{file.split(".")[0]}.png') == False:
+                        self.img_paths.pop()
+                        self.ann_paths.pop()
+        self.img_dir = img_dir
+        self.ann_dir = ann_dir
+        self.rcm = rcm
+        self.transforms = Composition(transforms)
+
+    def __len__(self):
+        if self.rcm == None:
+            return len(self.img_paths)
+        else:
+            return self.rcm.length
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        if self.rcm == None:
+            img_path = self.img_paths[idx]
+            ann_path = self.ann_paths[idx]
+        else:
+            random_cat_id = self.rcm.get_rare_cat_id()
+            stems = self.rcm.get_stems(random_cat_id)
+            stem = random.choice(stems)
+            stems.remove(stem)
+            extension = 'jpg' if self.img_dir[0].split("/")[-1] == 'images' else 'tiff'
+            img_path = f'{self.img_dir[0]}/{stem.split("/")[-1].split(".")[0]}.{extension}'
+            ann_path = stem
+
+        domain = 1 if 'rainy' in img_path else 0
+
+        return self.transforms.transform(
+            {
+                "img_path": img_path,
+                "ann_path": ann_path,
+                "domain": domain
+            }
+        )
+
+class BDD100K(Dataset):
+    def __init__(
+        self,
+        img_dir: Union[List[str], str],
+        ann_dir: Union[List[str], str],
+        rcm: Optional[RareCategoryManager],
+        transforms: List[Transform]
+    ):
+        if isinstance(img_dir, str):
+            img_dir = [img_dir]
+        if ann_dir is None:
+            ann_dir = [None for _ in range(0, len(img_dir))]
+        elif isinstance(ann_dir, str):
+            ann_dir = [ann_dir]
+        assert ann_dir is None or len(img_dir) == len(ann_dir), f"Inconsistent number of dataset paths."
+        
+        self.img_paths = list()
+        self.ann_paths = list()
+
+        if rcm == None:
+            for idx in range(0, len(img_dir)):
+                for file in os.listdir(img_dir[idx]):
+                    self.img_paths.append(f'{img_dir[idx]}/{file}')
+                    self.ann_paths.append(f'{ann_dir[idx]}/{file.split(".")[0]}.png')
+                    if ann_dir[idx] != None and os.path.exists(f'{ann_dir[idx]}/{file.split(".")[0]}.png') == False:
+                        self.img_paths.pop()
+                        self.ann_paths.pop()
+        self.img_dir = img_dir
+        self.ann_dir = ann_dir
+        self.rcm = rcm
+        self.transforms = Composition(transforms)
+
+    def __len__(self):
+        if self.rcm == None:
+            return len(self.img_paths)
+        else:
+            return self.rcm.length
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+
+        if self.rcm == None:
+            img_path = self.img_paths[idx]
+            ann_path = self.ann_paths[idx]
+        else:
+            random_cat_id = self.rcm.get_rare_cat_id()
+            stems = self.rcm.get_stems(random_cat_id)
+            stem = random.choice(stems)
+            stems.remove(stem)
+            extension = 'jpg' if self.img_dir[0].split("/")[-1] == 'images' else 'png'
+            img_path = f'{self.img_dir[0]}/{stem.split("/")[-1].split(".")[0]}.{extension}'
+            ann_path = stem
+
+        domain = 1 if 'rainy' in img_path else 0
+
+        return self.transforms.transform(
+            {
+                "img_path": img_path,
+                "ann_path": ann_path,
+                "domain": domain
+            }
+        )
+
 class CityscapesHDR(Dataset):
     def __init__(self, img_dir: str, ann_dir: str, rcm: Optional[RareCategoryManager], transforms: List[Transform]):
         super().__init__()
@@ -233,8 +356,8 @@ class CityscapesLDR(Dataset):
     
 def get_dataset(
     dataset_name: str,
-    img_dir: str,
-    ann_dir: str,
+    img_dir: Union[List[str], str],
+    ann_dir: Union[List[str], str],
     rcm: Optional[RareCategoryManager],
     transforms: List[Transform]
 ):

@@ -2,11 +2,9 @@ import sys
 import os
 import gc
 import pandas as pd
-from PIL import Image
 from datetime import datetime
 
 import numpy as np
-import random
 
 import torch
 import torch.nn as nn
@@ -36,15 +34,11 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
     categories = Category.load(cfg.category_csv)
     writer = SummaryWriter(tb_dir)
 
-    palette = np.array(
-        [[cat.r, cat.g, cat.b] for cat in categories],
-        dtype=np.uint8
-    )
-
     device_name = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device_name)
     set_seed(cfg.seed)
 
+    # Create for rare category sampling
     rcm = RareCategoryManager(categories, cfg.rcs_path, cfg.rcs_temperature) if cfg.rcs_path != "" else None
 
     train_transforms = [
@@ -61,6 +55,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         transform.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.1),
         transform.RandomGaussian(kernel_size=5),
         transform.Normalize(),
+        transform.Check(),
     ]
     val_transforms = [
         transform.LoadImg(),
@@ -74,6 +69,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         transform.ToTensor(),
         transform.Resize(cfg.image_scale),
         transform.Normalize(),
+        transform.Check(),
     ]
     
     train_dataset = get_dataset(dataset_name=cfg.dataset, img_dir=cfg.train_images_root, ann_dir=cfg.train_labels_root, rcm=rcm, transforms=train_transforms)
@@ -102,7 +98,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
     assert val_dataset.__len__() > 0
 
     metric = evaluate.load("mean_iou", keep_in_memory=True)
-    metric = Metrics(num_categories=len(categories), nan_to_num=0)
+    metric = Metrics(num_categories=len(categories), nan_to_num=0, ignore_ids=255)
 
     segconfig = SegformerConfig().from_pretrained("nvidia/mit-b0")
     segconfig.num_labels = len(categories)
@@ -117,7 +113,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
     )
     optimizer = Lookahead(optimizer=base_optimizer, k=5, alpha=0.5)
 
-    validator = Validator(val_dataloader, model, device, metric, cfg.crop_size, cfg.stride, len(categories), mode='slide')
+    validator = Validator(val_dataloader, model, device, metric, cfg.crop_size, cfg.stride, len(categories), mode='slide', ignore_index=cfg.ignore_index)
 
     warmup_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer.optimizer, 1e-4, 1, 1500)
     poly_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer.optimizer, cfg.max_iters - 1500, 1)
@@ -127,8 +123,6 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
         schedulers=[warmup_scheduler, poly_scheduler],
         milestones=[1500]
     )
-
-    # focal_loss = FocalLoss(gamma=2.0, reduction='mean', ignore_index=255)
 
     scaler = torch.GradScaler(device=device_name)
 
@@ -149,7 +143,7 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
 
     best_miou = 0.0 if checkpoint is None else last_best
     begin_iter = 0 if checkpoint is None else last_iteration
-    batch_loss, batch_miou = 0.0, 0.0
+    batch_loss = 0.0
     for iter in range(begin_iter + 1, cfg.max_iters + 1):
         model.train()
         optimizer.zero_grad()
@@ -163,26 +157,16 @@ def main(cfg: TrainingConfig, exp_name: str, checkpoint: str, log_dir: str):
                 images=imgs,
                 label=ann
             )
-            # loss = focal_loss.forward(input=upsampled_logits, target=ann)
         pred = upsampled_logits.argmax(dim=1)
         scaler.scale(loss).backward()
 
-        # metrics = metric._compute(
-        #     predictions=pred.cpu(),
-        #     references=ann.cpu(),
-        #     num_labels=segconfig.num_labels,
-        #     ignore_index=255,
-        #     reduce_labels=False,
-        # )
-        # batch_miou += metrics['mean_iou']
         metric.compute_and_accum(pred.cpu(), ann.cpu())
         batch_loss += loss.item()
                 
         if iter % cfg.train_interval == 0:
             train_loss = batch_loss / cfg.train_interval
-            # train_miou = batch_miou / cfg.train_interval
             train_miou = metric.get_and_reset()["IoU"].mean()
-            batch_loss, batch_miou = 0.0, 0.0
+            batch_loss = 0.0
             
             writer.add_scalar('Loss/Train', train_loss, iter)
             writer.add_scalar('mIoU/Train', train_miou, iter)

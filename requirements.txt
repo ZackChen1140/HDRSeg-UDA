@@ -1,6 +1,5 @@
 transformers==4.44.2
 tensorboard==2.12.1
-evaluate==0.4.3
 opencv-python-headless==4.11.0.86
 matplotlib==3.7.2
 pillow==10.4.0
@@ -9,3 +8,5 @@ ema-pytorch==0.7.7
 pytorch-ranger==0.1.1
 torch-optimizer==0.3.0
 scikit-learn==1.3.2
+joblib==1.4.2
+joblib-progress==1.0.5
